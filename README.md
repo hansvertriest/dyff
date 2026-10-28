@@ -74,23 +74,70 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 | `--pretty` | Indented JSON |
 | `-q, --quiet` | No progress output on stderr |
 
-### In CI (GitHub Actions)
+### In CI: a PR map in every PR description (GitHub Actions)
+
+Add dyff as a dev dependency (`npm install --save-dev dyff`), then add `.github/workflows/dyff.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyff section in the PR description up to date, and attaches the interactive page to the run:
 
 ```yaml
-# On push to main: build and cache the base index
-- run: npx dyff index -o base.json
-- uses: actions/upload-artifact@v4
-  with: { name: dyff-base, path: base.json }
+name: dyff PR map
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: dyff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
-# On pull_request: overlay the PR and post the report
-- uses: actions/checkout@v4
-  with: { fetch-depth: 0 }
-- uses: dawidd6/action-download-artifact@v6
-  with: { name: dyff-base, branch: main, workflow: <your-base-workflow>.yml }
-- run: npx dyff pr --base base.json --base-ref origin/${{ github.base_ref }} -o merged.json --report report.md
-- run: gh pr comment ${{ github.event.number }} --body-file report.md --edit-last || gh pr comment ${{ github.event.number }} --body-file report.md
-  env: { GH_TOKEN: ${{ github.token }} }
+jobs:
+  map:
+    # Forks and Dependabot get a read-only token and can't edit the description.
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --ignore-scripts
+
+      - name: Map the PR
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          base_sha=$(git merge-base "$BASE_REF" HEAD)
+          git worktree add --detach "$RUNNER_TEMP/base" "$base_sha"
+          ln -s "$PWD/node_modules" "$RUNNER_TEMP/base/node_modules"
+          npx dyff index --root "$RUNNER_TEMP/base" -o "$RUNNER_TEMP/base.json"
+          npx dyff pr --base "$RUNNER_TEMP/base.json" --base-ref "$BASE_REF" -o "$RUNNER_TEMP/merged.json"
+          mkdir -p "$RUNNER_TEMP/page"
+          npx dyff html "$RUNNER_TEMP/merged.json" -o "$RUNNER_TEMP/page/dyff-pr-${{ github.event.pull_request.number }}.html"
+
+      - id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ runner.temp }}/page/dyff-pr-${{ github.event.pull_request.number }}.html
+          archive: false
+          overwrite: true
+
+      - name: Update the PR description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}
+          MAP_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          gh api "$PR_URL" --jq '.body // ""' > "$RUNNER_TEMP/body.md"
+          npx dyff report "$RUNNER_TEMP/merged.json" --map --link "$MAP_URL" \
+            --embed-in "$RUNNER_TEMP/body.md" -o "$RUNNER_TEMP/new-body.md"
+          if ! cmp -s "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/new-body.md"; then
+            gh api -X PATCH "$PR_URL" -F "body=@$RUNNER_TEMP/new-body.md" --silent
+          fi
 ```
+
+For large codebases, build the base index once per merge to `main` and download it in the PR job instead of indexing the base branch every time.
 
 ## API
 
