@@ -16,7 +16,7 @@ The analysis uses the TypeScript compiler (via [ts-morph](https://ts-morph.com))
 ## Install
 
 ```sh
-npm install --save-dev dyff
+npm install --save-dev @hansvertriest/dyff
 ```
 
 Requires Node 18.17+ and git (for `--base-ref`).
@@ -76,7 +76,7 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 
 ### In CI: a PR map in every PR description (GitHub Actions)
 
-Add dyff as a dev dependency (`npm install --save-dev dyff`), then add `.github/workflows/dyff.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyff section in the PR description up to date, and attaches the interactive page to the run:
+Add dyff as a dev dependency (`npm install --save-dev @hansvertriest/dyff`), then add `.github/workflows/dyff.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyff section in the PR description up to date, and attaches the interactive page to the run:
 
 ```yaml
 name: dyff PR map
@@ -142,7 +142,7 @@ For large codebases, build the base index once per merge to `main` and download 
 ## API
 
 ```ts
-import { buildBaseIndex, buildOverlay, merge, markdownReport } from 'dyff';
+import { buildBaseIndex, buildOverlay, merge, markdownReport } from '@hansvertriest/dyff';
 
 const base = buildBaseIndex({ root: '/path/to/repo' });
 const overlay = buildOverlay({ root: '/path/to/repo', baseRef: 'origin/main' });
