@@ -232,7 +232,7 @@ export interface Checks {
   signatureChanges: SignatureChange[];
   newModuleDependencies: ModuleEdge[];
   removedModuleDependencies: ModuleEdge[];
-  /** Module cycles in the merged graph that do not exist on the base side. */
+  /** Module cycles in the merged graph whose modules were not already one cycle on the base side. */
   newCycles: string[][];
   /** All module cycles in the merged graph. */
   cycles: string[][];

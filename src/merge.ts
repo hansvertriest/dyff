@@ -166,8 +166,12 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
   const key = (e: ModuleEdge) => `${e.from}|${e.to}|${e.via}`;
   const baseKeys = new Set(baseEdges.map(key));
   const mergedKeys = new Set(mergedEdges.map(key));
-  const baseCycles = new Set(findCycles(baseEdges).map((c) => c.join('|')));
+  // A cycle is new when its modules were not already one cycle on the base side. Matching the exact
+  // member list would flag an existing cycle as new whenever the PR adds or removes one of its modules.
+  const baseCycleOf = new Map<string, number>();
+  findCycles(baseEdges).forEach((c, i) => c.forEach((m) => baseCycleOf.set(m, i)));
   const cycles = findCycles(mergedEdges);
+  const isNewCycle = (c: string[]) => !baseCycleOf.has(c[0]) || c.some((m) => baseCycleOf.get(m) !== baseCycleOf.get(c[0]));
 
   // Seeds: the most specific changed symbols (a class only counts when none of its members changed).
   const changedParents = new Set(changed.map((n) => n.parent).filter(Boolean));
@@ -241,7 +245,7 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
     signatureChanges,
     newModuleDependencies: mergedEdges.filter((e) => !baseKeys.has(key(e))),
     removedModuleDependencies: baseEdges.filter((e) => !mergedKeys.has(key(e))),
-    newCycles: cycles.filter((c) => !baseCycles.has(c.join('|'))),
+    newCycles: cycles.filter(isNewCycle),
     cycles,
     affectedRoutes: [...affected.values()].sort((a, b) => (a.route.fullPath ?? a.route.path).localeCompare(b.route.fullPath ?? b.route.path)),
     tests,

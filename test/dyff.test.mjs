@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reverseApply, sliceHunks, standaloneHtml } from '../dist/index.js';
@@ -231,5 +231,53 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.match(md, /This PR breaks 2 references/);
     assert.match(md, /GET \/api\/reports\/users\/:id/);
     assert.match(md, /`src\/auth` ⇄ `src\/users`/);
+  });
+});
+
+describe('cycles that exist before the PR', () => {
+  let dir;
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('does not report an existing cycle as new when the PR removes one of its modules', () => {
+    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    const write = (path, text) => {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), text);
+    };
+    const feature = (name) =>
+      [
+        "import { Module } from '@nestjs/common';",
+        "import { SharedEntity } from '../shared.entity';",
+        `export const ${name}Entities = [SharedEntity];`,
+        '@Module({})',
+        `export class ${name}Module {}`,
+        '',
+      ].join('\n');
+    const app = (names) =>
+      [
+        "import { Module } from '@nestjs/common';",
+        ...names.map((n) => `import { ${n}Module } from './${n.toLowerCase()}/${n.toLowerCase()}.module';`),
+        `@Module({ imports: [${names.map((n) => `${n}Module`).join(', ')}] })`,
+        'export class AppModule {}',
+        '',
+      ].join('\n');
+    cpSync(join(fixture, 'base', 'tsconfig.json'), join(dir, 'tsconfig.json'));
+    write('src/shared.entity.ts', 'export class SharedEntity {}\n');
+    for (const n of ['A', 'B', 'C']) write(`src/${n.toLowerCase()}/${n.toLowerCase()}.module.ts`, feature(n));
+    write('src/app.module.ts', app(['A', 'B', 'C']));
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    const base = buildBaseIndex({ root: dir });
+
+    git(dir, 'checkout', '-qb', 'feature');
+    git(dir, 'rm', '-rq', 'src/c');
+    write('src/app.module.ts', app(['A', 'B']));
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'pr');
+    const merged = merge(base, buildOverlay({ root: dir, baseRef: 'main' }));
+
+    assert.deepEqual(merged.checks.cycles, [['src', 'src/a', 'src/b']]);
+    assert.deepEqual(merged.checks.newCycles, []);
   });
 });
