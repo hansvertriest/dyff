@@ -86,11 +86,12 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .edge.imp{stroke-dasharray:3 4}
 .edge.chg{stroke:var(--accent);stroke-width:2.2}
 .edge.rem{stroke:var(--del);stroke-dasharray:6 4;stroke-width:2}
-.edge.cyc{stroke:var(--del);stroke-width:2.2}
+.edge.cyc{stroke:var(--kw);stroke-width:1.8}
+.edge.cyc-new{stroke:var(--del);stroke-width:2.4}
 .dim{opacity:.22}
 .node,.edge{transition:opacity .15s}
 @media (prefers-reduced-motion: reduce){.node,.edge{transition:none}}
-.mk-n{fill:var(--edge)} .mk-c{fill:var(--accent)} .mk-r{fill:var(--del)}
+.mk-n{fill:var(--edge)} .mk-c{fill:var(--accent)} .mk-r{fill:var(--del)} .mk-p{fill:var(--kw)}
 
 .panel{border-left:1px solid var(--line);background:var(--surface);overflow:auto;min-height:0}
 .pin{padding:20px 22px 40px}
@@ -120,7 +121,9 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 button.chip:hover{border-color:var(--edge)}
 .chip.chg{border-color:var(--accent);color:var(--accent)}
 .chip.rem{border-color:var(--del);color:var(--del);text-decoration:line-through}
-.chip.cyc{border-color:var(--del);color:var(--del)}
+.chip.cyc{border-color:var(--kw);color:var(--kw)}
+.chip.cyc-new{border-color:var(--del);color:var(--del)}
+.legend b{width:16px;height:0;border-top:2px solid;display:inline-block}
 .note{font-size:13px;color:var(--muted)}
 .decl{font-size:13px;color:var(--muted)}
 .decl code{font-size:12px;color:var(--ink)}
@@ -222,6 +225,9 @@ details.file>summary.fhead:hover{background:var(--line)}
         <span><i style="background:var(--add)"></i>New</span>
         <span><i style="background:var(--del)"></i>Removed</span>
         <span><i style="border:1.5px dashed var(--accent)"></i>Uses changed code</span>
+        <span><b style="color:var(--accent)"></b>New dependency</span>
+        <span><b style="color:var(--kw)"></b>Existing cycle</span>
+        <span><b style="color:var(--del)"></b>New cycle or removed</span>
       </div>
     </div>
     <div class="canvas" id="canvas"></div>
@@ -257,13 +263,15 @@ function build() {
   for (const d of C.danglingReferences) { const n = byId.get(d.from); if (n && nodes.has(n.module)) nodes.get(n.module).warn++; }
 
   const cyc = new Map(); C.cycles.forEach((c, i) => c.forEach(m => cyc.set(m, i)));
+  const newCycle = new Set(C.newCycles.map(c => c.join('|')));
+  const cycleState = (from, to) => !cyc.has(from) || cyc.get(from) !== cyc.get(to) ? false : newCycle.has(C.cycles[cyc.get(from)].join('|')) ? 'new' : 'old';
   const newKeys = new Set(C.newModuleDependencies.map(e => e.from + '>' + e.to));
   const edges = new Map();
   const add = (from, to, via, extra = {}) => {
     if (!from || !to || from === to || !nodes.has(from) || !nodes.has(to)) return;
     const k = from + '>' + to;
     let e = edges.get(k);
-    if (!e) edges.set(k, e = { from, to, kinds: new Set(), changed: newKeys.has(k), removed: false, forwardRef: false, cycle: cyc.has(from) && cyc.get(from) === cyc.get(to) });
+    if (!e) edges.set(k, e = { from, to, kinds: new Set(), changed: newKeys.has(k), removed: false, forwardRef: false, cycle: cycleState(from, to) });
     e.kinds.add(via); if (extra.forwardRef) e.forwardRef = true; if (extra.removed) e.removed = true;
   };
   for (const m of D.modules) if (m.change?.status !== 'removed') for (const im of m.imports) if (im.module) add(m.id, im.module, 'module-import', im);
@@ -352,9 +360,9 @@ function renderGraph() {
       d = `M${x1},${y1} C${x1 + k},${y1} ${gs - 4},${ly} ${gs + 14},${ly} L${ge - 14},${ly} C${ge + 4},${ly} ${x2 - k},${y2} ${x2},${y2}`;
     } else { const bx1 = a.x + W / 2, by1 = a.y + H, bx2 = b.x + W / 2 + 10, by2 = b.y + H + 6, lo = Math.max(by1, by2) + 40; height = Math.max(height, lo + PAD); d = `M${bx1},${by1} C${bx1},${lo} ${bx2},${lo} ${bx2},${by2}`; }
     const dim = focus && !(selected ? (e.from === selected || e.to === selected) : (focus.has(e.from) && focus.has(e.to)));
-    const cls = ['edge', e.removed ? 'rem' : e.cycle ? 'cyc' : e.changed ? 'chg' : '', !e.kinds.has('module-import') ? 'imp' : '', dim ? 'dim' : ''].join(' ');
-    const mk = e.removed || e.cycle ? 'mr' : e.changed ? 'mc' : 'mn';
-    const title = `${M.nodes.get(e.from).name} → ${M.nodes.get(e.to).name}\n${e.kinds.has('module-import') ? '@Module import' : 'File import only'}${e.forwardRef ? ' (forwardRef)' : ''}${e.cycle ? '\nPart of a circular dependency' : ''}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : ''}`;
+    const cls = ['edge', e.removed ? 'rem' : e.cycle === 'new' ? 'cyc-new' : e.cycle ? 'cyc' : e.changed ? 'chg' : '', !e.kinds.has('module-import') ? 'imp' : '', dim ? 'dim' : ''].join(' ');
+    const mk = e.removed || e.cycle === 'new' ? 'mr' : e.cycle ? 'mp' : e.changed ? 'mc' : 'mn';
+    const title = `${M.nodes.get(e.from).name} → ${M.nodes.get(e.to).name}\n${e.kinds.has('module-import') ? '@Module import' : 'File import only'}${e.forwardRef ? ' (forwardRef)' : ''}${e.cycle === 'new' ? '\nPart of a circular dependency this PR creates' : e.cycle ? '\nPart of a circular dependency that already existed' : ''}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : ''}`;
     eh += `<path class="${cls}" d="${d}" marker-end="url(#${mk})"><title>${esc(title)}</title></path>`;
   }
   let nh = '';
@@ -372,7 +380,7 @@ function renderGraph() {
   }
   const vw = Math.max(width, 300);
   cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" style="width:100%;max-width:${vw}px;min-width:${Math.round(vw * 0.62)}px" role="img" aria-label="Modules touched by this pull request">
-    <defs>${['mn', 'mc', 'mr'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
+    <defs>${['mn', 'mc', 'mr', 'mp'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r', 'mk-p'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
     ${eh}${nh}</svg>`;
 }
 
@@ -445,7 +453,7 @@ function renderSummary() {
     ${changedFiles().map(f => fileSection(f, true)).join('')}
     <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
     ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
-    <p class="foot">Select a module in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Solid arrows are <code>@Module</code> imports, dotted ones are file imports only; red arrows are part of a cycle.</p>`;
+    <p class="foot">Select a module in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Solid arrows are <code>@Module</code> imports, dotted ones are file imports only. Blue arrows are new in this PR, purple ones are part of a cycle that already existed, red ones are removed or part of a cycle this PR creates.</p>`;
 }
 
 /* ---------- Files ---------- */
@@ -478,7 +486,7 @@ function changedFiles() {
 function renderModule(id) {
   const n = M.nodes.get(id), m = n.mod;
   const outs = [...n.out.values()], ins = [...n.inn].map(f => M.nodes.get(f).out.get(id));
-  const chip = (e, other) => `<button class="chip ${e.removed ? 'rem' : e.cycle ? 'cyc' : e.changed ? 'chg' : ''}" data-mod="${esc(other)}" title="${e.removed ? 'Removed in this PR' : e.cycle ? 'Part of a cycle' : e.changed ? 'New in this PR' : ''}">${esc(M.nodes.get(other).name)}${e.kinds.has('module-import') ? '' : ' (file)'}</button>`;
+  const chip = (e, other) => `<button class="chip ${e.removed ? 'rem' : e.cycle === 'new' ? 'cyc-new' : e.cycle ? 'cyc' : e.changed ? 'chg' : ''}" data-mod="${esc(other)}" title="${e.removed ? 'Removed in this PR' : e.cycle === 'new' ? 'Part of a cycle this PR creates' : e.cycle ? 'Part of a cycle that already existed' : e.changed ? 'New in this PR' : ''}">${esc(M.nodes.get(other).name)}${e.kinds.has('module-import') ? '' : ' (file)'}</button>`;
   let why;
   if (n.changed) why = `${plural(n.files.length, 'file')} ${n.state === 'added' ? 'added' : n.state === 'removed' ? 'removed' : 'changed'} in this PR.`;
   else if (n.affected) why = 'Not changed in this PR, but its code references something that did. Worth a look when reviewing.';

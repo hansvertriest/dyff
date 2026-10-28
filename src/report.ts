@@ -43,7 +43,7 @@ export function markdownReport(index: Index, opts: ReportOptions = {}): string {
   if (opts.link) out.push(`**[Open the interactive PR map](${opts.link})**`, '');
   if (opts.map) {
     const map = mermaidModuleMap(index);
-    if (map) out.push(map, '', '<sub>Colored: changed modules · dashed: modules that use changed code · solid arrows: <code>@Module</code> imports · dotted: file imports · blue: new in this PR · red: circular</sub>', '');
+    if (map) out.push(map, '', '<sub>Colored: changed modules · dashed: modules that use changed code · solid arrows: <code>@Module</code> imports · dotted: file imports · blue: new in this PR · purple: existing cycle · red: removed, or a cycle this PR creates</sub>', '');
   }
   if (s.changedModules.length) out.push(`**Changed modules:** ${s.changedModules.map(code).join(', ')}`, '');
   if (s.affectedModules.length) out.push(`**Modules that use changed code:** ${s.affectedModules.map(code).join(', ')}`, '');

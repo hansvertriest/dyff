@@ -71,13 +71,17 @@ export function mermaidModuleMap(index: Index, opts: MermaidOptions = {}): strin
   const isRemoved = new Set(c.removedModuleDependencies.map((e) => `${e.from}|${e.to}`));
   const cycleOf = new Map<string, number>();
   c.cycles.forEach((cy, i) => cy.forEach((m) => cycleOf.set(m, i)));
+  const newCycles = new Set(c.newCycles.map((cy) => cy.join('|')));
   const styles: string[] = [];
   [...pairs.values()].forEach((p, i) => {
     const k = `${p.from}|${p.to}`;
     const arrow = p.module ? '-->' : '-.->';
     lines.push(`  ${ids.get(p.from)} ${arrow}${p.forwardRef ? '|forwardRef|' : ''} ${ids.get(p.to)}`);
     if (isRemoved.has(k)) styles.push(`  linkStyle ${i} stroke:#B83A33,stroke-width:2px,stroke-dasharray:6 4`);
-    else if (cycleOf.has(p.from) && cycleOf.get(p.from) === cycleOf.get(p.to)) styles.push(`  linkStyle ${i} stroke:#B83A33,stroke-width:2.5px`);
+    else if (cycleOf.has(p.from) && cycleOf.get(p.from) === cycleOf.get(p.to)) {
+      const isNewCycle = newCycles.has(c.cycles[cycleOf.get(p.from)!].join('|'));
+      styles.push(`  linkStyle ${i} stroke:${isNewCycle ? '#B83A33' : '#7A3BB8'},stroke-width:${isNewCycle ? 2.5 : 1.8}px`);
+    }
     else if (isNew.has(k)) styles.push(`  linkStyle ${i} stroke:#3B4FD8,stroke-width:2.5px`);
   });
   lines.push(
