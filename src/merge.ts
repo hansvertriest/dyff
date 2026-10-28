@@ -132,7 +132,9 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
   const inPr = (id: string) => touched.has(byId.get(id)?.file ?? '');
   const changed = merged.nodes.filter((n) => n.change);
 
-  // Dangling references: unchanged code pointing at symbols the PR removed.
+  // Dangling references: unchanged code pointing at symbols the PR removed. A target that was never
+  // indexed (a .json import, say) is not one: it is missing on the base side too.
+  const baseIds = new Set(base.nodes.map((n) => n.id));
   const dangling: DanglingReference[] = [];
   const renameGuess = (gone: SymbolNode): string | undefined => {
     const cands = merged.nodes.filter(
@@ -145,7 +147,7 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
     const targets = new Set([...n.uses, ...(n.injects ?? []).map((i) => i.target).filter((t): t is string => !!t)]);
     for (const to of targets) {
       const t = byId.get(to);
-      if (t && t.change?.status !== 'removed') continue;
+      if (t ? t.change?.status !== 'removed' : !baseIds.has(to)) continue;
       const guess = t ? renameGuess(t) : undefined;
       dangling.push({ from: n.id, to, file: n.file, ...(guess ? { maybeRenamedTo: guess } : {}) });
     }

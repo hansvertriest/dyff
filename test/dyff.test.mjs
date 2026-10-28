@@ -124,6 +124,13 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.equal(node(base, 'src/users/users.service.ts#UsersService.constructor').injects[0].kind, 'repository');
   });
 
+  it('names GraphQL routes after the operation, not the return type', () => {
+    const route = (m) => node(base, `src/users/users.resolver.ts#UsersResolver.${m}`).route;
+    assert.deepEqual(route('findAll'), { type: 'graphql', verb: 'Query', path: 'users' });
+    assert.deepEqual(route('findOne'), { type: 'graphql', verb: 'Query', path: 'user' });
+    assert.deepEqual(route('rename'), { type: 'graphql', verb: 'Mutation', path: 'rename' });
+  });
+
   it('marks symbols in the overlay as added, modified and removed', () => {
     assert.equal(overlay.kind, 'overlay');
     assert.equal(node(overlay, 'src/users/users.service.ts#UsersService.findByEmail').change.status, 'added');
@@ -149,6 +156,8 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
   });
 
   it('finds references the PR broke', () => {
+    // A .json import is a use of a file dyff never indexes; it is not broken.
+    assert.ok(node(merged, 'src/reports/report-labels.ts#reportTitle').uses.includes('src/reports/report-labels.json'));
     assert.deepEqual(
       merged.checks.danglingReferences.map((d) => [d.from, d.to]),
       [

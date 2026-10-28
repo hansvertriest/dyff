@@ -74,6 +74,17 @@ function stringArg(d: ts.Decorator | undefined, objectKey?: string): string {
   return literalText(a) ?? '';
 }
 
+/** GraphQL operation name: `@Query('users')` or `@Query(() => [User], { name: 'users' })`, never the type function. */
+function graphqlName(d: ts.Decorator): string {
+  for (const a of decoratorArgs(d)) {
+    if (ts.isStringLiteralLike(a)) return a.text;
+    if (ts.isObjectLiteralExpression(a))
+      for (const p of a.properties)
+        if (ts.isPropertyAssignment(p) && p.name.getText() === 'name') return literalText(p.initializer) ?? '';
+  }
+  return '';
+}
+
 export function joinPath(...parts: (string | undefined)[]): string {
   const joined = parts
     .filter((p): p is string => !!p)
@@ -218,7 +229,7 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
         }
         const type = ROUTE_DECORATORS[dn];
         if (type && (type !== 'graphql' || resolver)) {
-          extra.route = { type, verb: dn, path: stringArg(d, 'name') || mname };
+          extra.route = { type, verb: dn, path: (type === 'graphql' ? graphqlName(d) : stringArg(d, 'name')) || mname };
           break;
         }
       }
