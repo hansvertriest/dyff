@@ -18,13 +18,13 @@ export interface ServeOptions {
 
 /** Serve the viewer page and a merged index on http://host:port/. */
 export function serve(indexJson: string, opts: ServeOptions = {}): Promise<{ server: Server; url: string }> {
-  const html = readFileSync(VIEWER);
   const host = opts.host ?? '127.0.0.1';
   const server = createServer((req, res) => {
     const path = (req.url ?? '/').split('?')[0];
     if (path === '/' || path === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(html);
+      // Read on every request, so edits to the viewer show on reload.
+      res.end(readFileSync(VIEWER));
     } else if (path === '/index.json') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(indexJson);
