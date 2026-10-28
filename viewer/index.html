@@ -135,7 +135,12 @@ button.chip:hover{border-color:var(--edge)}
 .chain{display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px;font:12px var(--mono);color:var(--muted);margin-top:2px}
 .chain span+span::before{content:"→ ";color:var(--edge)}
 
-.file{margin-top:16px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.file{margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+details.file>summary.fhead{cursor:pointer;list-style:none}
+details.file>summary.fhead::-webkit-details-marker{display:none}
+details.file>summary.fhead::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s;flex:none;align-self:center;margin-right:2px}
+details.file[open]>summary.fhead::before{transform:rotate(45deg)}
+details.file>summary.fhead:hover{background:var(--line)}
 .fhead{display:flex;align-items:baseline;gap:8px;padding:10px 12px;background:var(--surface-2);flex-wrap:wrap}
 .fname{font:500 13px var(--mono);word-break:break-all;flex:1;min-width:0}
 .fname span{color:var(--muted);font-weight:400}
@@ -436,9 +441,37 @@ function renderSummary() {
     ${C.removedModuleDependencies.length ? section('Removed module dependencies', C.removedModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via}</span></button>`) : ''}
     ${section('Affected routes', C.affectedRoutes, r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(id => `<span>${esc(symLabel(id))}</span>`).join('')}</span></button>`)}
     ${section('Changed code no test reaches', C.untested, id => `<button class="row" data-sym="${esc(id)}"><span class="main"><code>${esc(symLabel(id))}</code></span><span class="sub">${esc(byId.get(id)?.file)}</span></button>`, false)}
+    <h3>What changed<span class="count">${changedFiles().length} files</span></h3>
+    ${changedFiles().map(f => fileSection(f, true)).join('')}
     <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
     ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
     <p class="foot">Select a module in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Solid arrows are <code>@Module</code> imports, dotted ones are file imports only; red arrows are part of a cycle.</p>`;
+}
+
+/* ---------- Files ---------- */
+const bySize = (a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions);
+/** A changed file: its changed symbols with their own diffs, then the whole file diff. */
+function fileSection(f, collapsed = false) {
+  const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
+  const symHtml = syms.map(s => {
+    const c = counts(s.change.hunks);
+    return `<details class="sym"${syms.length <= 4 ? ' open' : ''}><summary><span class="sname">${esc(s.kind === 'file' ? 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
+      <div class="sbody">${diffBlock(s.change.hunks)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
+  }).join('');
+  const ch = f.change;
+  const head = `<span class="badge b-${ch.status}">${statusWord(ch.status)}</span>${f.test ? '<span class="badge b-test">test</span>' : ''}${f.other ? '<span class="badge">not analyzed</span>' : ''}<span class="fname">${esc(baseOf(f.path))} <span>${esc(dirOf(f.path))}</span></span><span class="n-a">+${ch.additions}</span><span class="n-d">−${ch.deletions}</span>`;
+  const whole = !ch.hunks.length ? '<p class="note" style="padding:10px 12px;margin:0">No text diff (binary file, or only renamed).</p>'
+    : syms.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(ch.hunks)}</div></details>`
+    : `<div class="sbody" style="padding-top:12px">${diffBlock(ch.hunks)}</div>`;
+  const body = `${ch.oldPath ? `<p class="note" style="padding:6px 12px 0;margin:0">Renamed from ${esc(ch.oldPath)}</p>` : ''}${symHtml}${whole}`;
+  return collapsed
+    ? `<details class="file"><summary class="fhead">${head}</summary>${body}</details>`
+    : `<section class="file"><div class="fhead">${head}</div>${body}</section>`;
+}
+/** Every file the PR touched, analyzed or not. */
+function changedFiles() {
+  const other = (D.pr?.unindexedFiles || []).map(u => ({ path: u.path, test: false, other: true, change: { status: u.status, oldPath: u.oldPath, additions: u.additions, deletions: u.deletions, hunks: u.hunks || [] } }));
+  return [...D.files.filter(f => f.change), ...other].sort((a, b) => (a.test - b.test) || (!!a.other - !!b.other) || bySize(a, b));
 }
 
 /* ---------- Module ---------- */
@@ -457,18 +490,7 @@ function renderModule(id) {
     ['External imports', m.imports.filter(i => i.external).map(i => i.name + (i.dynamic ? '.' + i.dynamic + '()' : ''))],
   ].filter(([, xs]) => xs.length).map(([k, xs]) => `<p class="decl">${k}: ${xs.map(x => `<code>${esc(x)}</code>`).join(', ')}</p>`).join('') : '<p class="decl">No <code>*.module.ts</code> here; files in this folder are grouped by location.</p>';
   const broken = D.checks.danglingReferences.filter(d => byId.get(d.from)?.module === id);
-  const files = n.files.slice().sort((a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions)).map(f => {
-    const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
-    const symHtml = syms.map(s => {
-      const c = counts(s.change.hunks);
-      return `<details class="sym"${syms.length <= 4 ? ' open' : ''}><summary><span class="sname">${esc(s.kind === 'file' ? 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
-        <div class="sbody">${diffBlock(s.change.hunks)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
-    }).join('');
-    return `<section class="file"><div class="fhead"><span class="badge b-${f.change.status}">${statusWord(f.change.status)}</span>${f.test ? '<span class="badge b-test">test</span>' : ''}<span class="fname">${esc(baseOf(f.path))} <span>${esc(dirOf(f.path))}</span></span><span class="n-a">+${f.change.additions}</span><span class="n-d">−${f.change.deletions}</span></div>
-      ${f.change.oldPath ? `<p class="note" style="padding:6px 12px 0;margin:0">Renamed from ${esc(f.change.oldPath)}</p>` : ''}
-      ${symHtml}
-      ${f.change.hunks.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(f.change.hunks)}</div></details>` : ''}</section>`;
-  }).join('');
+  const files = n.files.slice().sort(bySize).map(f => fileSection(f)).join('');
   const routes = D.nodes.filter(s => s.module === id && s.route);
   $('#pin').innerHTML = `
     <button class="back" data-action="back">← Back</button>

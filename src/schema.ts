@@ -184,7 +184,7 @@ export interface PrInfo {
   /** Base id -> new id, for symbols in renamed files. */
   renamedSymbols: Record<string, string>;
   /** Changed files the indexer skipped (not TypeScript, or outside the project). */
-  unindexedFiles: { path: string; status: string; additions: number; deletions: number }[];
+  unindexedFiles: { path: string; oldPath?: string; status: string; additions: number; deletions: number; hunks: Hunk[] }[];
 }
 
 export interface DanglingReference {

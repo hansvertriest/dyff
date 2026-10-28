@@ -112,7 +112,14 @@ export function buildOverlay(opts: OverlayOptions): Index {
     const indexedNew = df.status !== 'removed' && projectPaths.has(df.path);
     const indexedOld = df.status === 'removed' && isIndexable(oldPath);
     if (!indexedNew && !indexedOld) {
-      pr.unindexedFiles.push({ path: df.path, status: df.status, additions: df.additions, deletions: df.deletions });
+      pr.unindexedFiles.push({
+        path: df.path,
+        ...(df.status === 'renamed' ? { oldPath } : {}),
+        status: df.status,
+        additions: df.additions,
+        deletions: df.deletions,
+        hunks: df.hunks,
+      });
       continue;
     }
 
