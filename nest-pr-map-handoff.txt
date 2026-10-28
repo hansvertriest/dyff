@@ -1,0 +1,172 @@
+NEST PR MAP - PROJECT HANDOFF
+=============================
+
+1. GOAL
+-------
+Build a tool that turns a NestJS codebase into structured JSON, where every
+module, file, class and function is linked to the places it is actually
+referenced. That JSON is used to visualize code changes (GitHub pull requests)
+as a diagram instead of only as text diffs.
+
+The end goal: a reviewer opens a PR and sees a small, readable map of what
+changed, plus the context around it from the whole codebase (who calls the
+changed code, which HTTP routes are affected, which callers the PR broke).
+The full codebase graph is NOT meant to be shown all at once. It is a
+background index used to give context to changes.
+
+
+2. WHAT EXISTS TODAY (prototype)
+--------------------------------
+File: nest-pr-map.html (single self-contained HTML page, no build step).
+
+What it does:
+- Input: a GitHub PR link, or a pasted git diff ("git diff main...branch" or a
+  PR's .diff), or a built-in example PR.
+- Draws a graph where each NestJS module is a box. Color = state (changed,
+  new, removed). Dashed outline = unchanged module that imports a changed one.
+- Arrows: solid = @Module imports, dotted = plain file imports between
+  modules. Highlighted = added/changed by the PR, red = removed.
+- Clicking a module opens a side panel with:
+  - its providers, controllers, exports (parsed from @Module)
+  - "Imports" and "Imported by" lists
+  - each changed file, split into the changed classes/methods/functions,
+    each marked new / changed / removed, with its own diff
+  - HTTP routes for controller methods (e.g. POST /auth/login)
+  - "Called from": where changed symbols are referenced
+- Summary panel: counts, changed modules, affected modules, routes touched.
+
+How it works internally:
+- Parses unified diffs (diff --git format) into files and hunks.
+- Detects symbols with regex/indentation heuristics (classes, methods,
+  functions, constructors, route decorators, @Controller prefix), not the
+  TypeScript compiler.
+- Module detection: directories containing *.module.ts; files are assigned to
+  the nearest module directory. Files under the AppModule directory but in
+  their own folder (e.g. src/common) become an implicit "folder" group.
+- Module edges come from @Module({ imports: [...] }); file-import edges come
+  from relative import statements.
+- When run locally with a PR link, it uses the GitHub API: PR metadata,
+  changed files with patches, the repo tree, and full contents of changed .ts
+  files plus every *.module.ts. Optional GitHub token (for private repos and
+  the 60 requests/hour unauthenticated limit), optionally remembered in
+  localStorage.
+
+Important constraint:
+- When published inside Claude, the page cannot make requests to other sites
+  (content-security policy), so PR links cannot be fetched there. It falls back
+  to: open the PR's .diff on GitHub, copy it, paste it in. The downloaded HTML,
+  opened from your own computer, CAN fetch PRs directly from a link.
+
+Known limitations of the prototype:
+- Regex-based symbol detection; works for typical Prettier-formatted Nest
+  code, can miss unusual formatting.
+- Dynamic modules (forRoot/forRootAsync), string injection tokens and
+  forwardRef are not traced.
+- "Called from" matches by name only, and only within files in the PR (plus
+  fetched files). Two methods both named "create" look like each other's
+  callers.
+- In paste mode, only the diff is available, so the method a change belongs
+  to is inferred from nearby lines.
+- Hand-written column graph layout; fine for 5-15 nodes, will tangle with many.
+
+
+3. DECISIONS MADE
+-----------------
+3.1 Analysis approach
+- Use the TypeScript compiler via ts-morph for real analysis (exact
+  references through the type checker, resolves path aliases and barrel files).
+- Combine general TypeScript analysis (files, classes, functions, references)
+  with a NestJS layer (@Module imports/providers/controllers/exports,
+  constructor injection, controller routes).
+- A runtime alternative exists (Nest's ModulesContainer / DiscoveryService,
+  or the nestjs-spelunker library) which resolves dynamic modules perfectly,
+  but needs the app to boot and only gives module/provider level. Static
+  analysis is the primary approach.
+
+3.2 Architecture: base index + PR overlay
+- BASE INDEX: the full codebase on main, indexed by a Node CLI (ts-morph).
+  Built in CI on each merge and cached.
+- PR OVERLAY: only the files the PR changed, re-indexed in full, plus a list
+  of deleted files and symbols.
+- The page loads both, swaps the overlay into the base index, and marks what
+  changed.
+
+3.3 How the PR overlay is computed (clarified explicitly)
+- NOT calculated from the diff alone. The diff only says which files changed
+  and supplies the before/after lines to display.
+- Check out the full PR branch (needed so the type checker can resolve
+  references, e.g. which findByEmail a call points to), but only walk and
+  record symbols/references for the changed files. Do NOT re-index the whole
+  branch.
+- Changed files are re-indexed in full (not just hunk lines), because a hunk
+  can't tell which method a line belongs to and line numbers shift.
+- References inside unchanged files are identical to main, so they come from
+  the cached base index.
+
+3.4 Checks to run after merging the overlay
+- Dangling references: references from unchanged files that now point to a
+  symbol the PR removed or renamed. Show these as "this PR breaks N callers
+  it didn't update". High-value review signal.
+- Signature changes: if a changed method's signature changed, list its
+  callers outside the PR as places to review.
+- New dependencies between modules and new circular dependencies, shown
+  against the real existing graph.
+
+3.5 Shared JSON format
+- One schema for both the base index and the PR overlay. A node looks like:
+
+  {
+    "id": "src/users/users.service.ts#UsersService.findOne",
+    "kind": "method",
+    "module": "src/users",
+    "range": [19, 23],
+    "references": ["src/orders/orders.service.ts#OrdersService.createForUser"],
+    "change": { "status": "modified", "hunks": [ ... ] }
+  }
+
+- In the base index, "change" is absent. In the overlay, changed symbols carry
+  "change" (status added / modified / removed, plus their diff hunks).
+- Stable IDs: "<file path>#<Class>.<method>" so symbols can be matched
+  between main and the branch.
+- The page has one reader for this format; "show a PR" = load the index and
+  highlight everything with a "change".
+
+3.6 Visualization principles
+- Never show the whole codebase at once. Show changed code plus a few steps of
+  context.
+- Zoom levels: modules first; click to expand into providers/controllers,
+  then methods and callers.
+- Focus mode: pick one symbol and show its dependencies and dependents a few
+  steps out.
+- Blast radius: follow callers upward to affected HTTP routes, e.g.
+  findOne -> OrdersService.createForUser -> OrdersController.create ->
+  POST /orders.
+- Show which tests (spec files) reach the changed code; flag changed code no
+  test reaches.
+- For larger graphs, replace the hand-written layout with ELK.js or Dagre.
+- Flag circular imports / forwardRef cycles in red.
+
+
+4. NEXT STEPS (agreed, not started yet)
+---------------------------------------
+1. Write the indexer CLI (Node + ts-morph):
+   - Command 1: index a whole codebase -> base index JSON.
+   - Command 2: given a PR branch and its diff against main, index only the
+     changed files (with the full branch loaded) -> overlay JSON with
+     "change" fields and a list of deleted files/symbols.
+   - Capture: modules (@Module imports/providers/controllers/exports),
+     classes, methods, functions, constructor injections, controller routes
+     (with @Controller prefix), and exact references for each symbol.
+   - Handle where feasible: custom providers (provide/useClass/useFactory),
+     @Inject string tokens, forwardRef, path aliases, barrel files.
+2. Update the page to load the base index + overlay JSON, merge them, and
+   show the context features (real callers across the codebase, blast radius
+   to routes, dangling references, signature-change callers, tests).
+3. Later: run the CLI in CI on merges (base index) and on every PR (overlay),
+   so reviewers get the map automatically. Optionally cache and only
+   re-index changed files.
+
+Rough effort estimates given:
+- Whole module graph in the existing tool: an afternoon.
+- Function-level graph with exact references via the ts-morph CLI: a few days.
+- Making it navigable at scale (zoom, focus mode, search): a week or two.

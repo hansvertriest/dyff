@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dyff PR map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E8ECF0; --surface:#F8FAFB; --surface-2:#EEF2F5; --ink:#18202B; --muted:#5A6574; --line:#CBD3DC; --edge:#9AA5B3;
+  --accent:#3B4FD8; --accent-soft:#E2E6FB;
+  --add:#17804F; --add-bg:#DCF2E5; --del:#B83A33; --del-bg:#F8E0DD; --mod:#9C5F08; --mod-bg:#F5E9D2;
+  --kw:#7A3BB8; --str:#1E7A6E; --dec:#A8530F; --com:#7C8794;
+  --sans:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+  box-sizing:border-box;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#11151B; --surface:#192029; --surface-2:#202833; --ink:#E3E8EE; --muted:#8E99A8; --line:#2D3744; --edge:#556172;
+    --accent:#93A1FF; --accent-soft:#252C4F;
+    --add:#4FC48C; --add-bg:#16301F; --del:#F08A80; --del-bg:#3A1E1C; --mod:#E2AA4C; --mod-bg:#372A13;
+    --kw:#C79BFF; --str:#6DD3C2; --dec:#F0A963; --com:#76818F;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11151B; --surface:#192029; --surface-2:#202833; --ink:#E3E8EE; --muted:#8E99A8; --line:#2D3744; --edge:#556172;
+  --accent:#93A1FF; --accent-soft:#252C4F;
+  --add:#4FC48C; --add-bg:#16301F; --del:#F08A80; --del-bg:#3A1E1C; --mod:#E2AA4C; --mod-bg:#372A13;
+  --kw:#C79BFF; --str:#6DD3C2; --dec:#F0A963; --com:#76818F;
+  color-scheme: dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+[hidden]{display:none !important}
+html{height:100%}
+body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);display:flex;flex-direction:column}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code{font-family:var(--mono);font-size:.92em}
+
+.top{padding:12px 20px;border-bottom:1px solid var(--line);background:var(--surface);display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.brand{font-weight:600;font-size:17px;display:flex;align-items:center;gap:9px;margin:0}
+.prtitle{margin:0;font-weight:500;flex:1 1 300px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prtitle small{color:var(--muted);font-weight:400;margin-left:6px;font-family:var(--mono);font-size:12.5px}
+.search{position:relative;flex:0 1 300px;min-width:180px}
+.search input{width:100%;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.results{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(15,20,30,.14);max-height:60vh;overflow:auto;padding:4px}
+.results button{display:block;width:100%;text-align:left;background:none;border:0;border-radius:6px;padding:6px 8px}
+.results button:hover,.results button.on{background:var(--surface-2)}
+.results small{display:block;color:var(--muted);font:11.5px var(--mono)}
+
+main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
+.stage{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
+.stagebar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:12px 20px 0}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.canvas{flex:1;min-height:0;overflow:auto;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
+.canvas svg{display:block;height:auto}
+
+.node{cursor:pointer}
+.node rect.box{fill:var(--surface);stroke:var(--line);stroke-width:1}
+.node:hover rect.box{stroke:var(--edge)}
+.node.sel rect.box{stroke:var(--accent);stroke-width:2}
+.node.affected rect.box{stroke:var(--accent);stroke-dasharray:5 4}
+.node.context rect.box{fill:var(--surface-2)}
+.node.hot rect.box{stroke:var(--accent);stroke-width:2}
+.node .bar{fill:var(--line)}
+.node.s-modified .bar{fill:var(--mod)}
+.node.s-added .bar{fill:var(--add)}
+.node.s-removed .bar{fill:var(--del)}
+.node.affected .bar{fill:var(--accent)}
+.node .nm{font:600 14px var(--sans);fill:var(--ink)}
+.node .pth{font:12px var(--mono);fill:var(--muted)}
+.node .meta{font:500 12px var(--sans);fill:var(--muted)}
+.node .meta .a{fill:var(--add)} .node .meta .d{fill:var(--del)} .node .meta .w{fill:var(--del)}
+.node:focus{outline:none}
+.node:focus-visible rect.box{stroke:var(--accent);stroke-width:2}
+.edge{fill:none;stroke:var(--edge);stroke-width:1.4}
+.edge.imp{stroke-dasharray:3 4}
+.edge.chg{stroke:var(--accent);stroke-width:2.2}
+.edge.rem{stroke:var(--del);stroke-dasharray:6 4;stroke-width:2}
+.edge.cyc{stroke:var(--del);stroke-width:2.2}
+.dim{opacity:.22}
+.node,.edge{transition:opacity .15s}
+@media (prefers-reduced-motion: reduce){.node,.edge{transition:none}}
+.mk-n{fill:var(--edge)} .mk-c{fill:var(--accent)} .mk-r{fill:var(--del)}
+
+.panel{border-left:1px solid var(--line);background:var(--surface);overflow:auto;min-height:0}
+.pin{padding:20px 22px 40px}
+.panel h2{font-size:22px;line-height:1.25;margin:0 0 2px;letter-spacing:-.01em;word-break:break-word}
+.panel h3{font-size:14px;margin:22px 0 8px;display:flex;align-items:center;gap:8px}
+.panel h3 .count{font-weight:500;font-size:12px;border-radius:999px;padding:0 8px;background:var(--surface-2);color:var(--muted)}
+.panel h3 .count.warn{background:var(--del-bg);color:var(--del)}
+.panel .path{font:12.5px var(--mono);color:var(--muted);margin:0 0 10px;word-break:break-all}
+.panel p{margin:0 0 10px}
+.lead{color:var(--muted)}
+.back{margin:-4px 0 12px -8px;border:0;background:none;color:var(--muted);padding:6px 8px;border-radius:8px}
+.back:hover{color:var(--ink)}
+.stats{display:flex;gap:18px;margin:12px 0 4px;flex-wrap:wrap}
+.stats div{display:flex;flex-direction:column}
+.stats b{font-size:20px;font-weight:600}
+.stats div>span{font-size:12px;color:var(--muted)}
+.mlist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.mlist li{border-bottom:1px solid var(--line)}
+.mlist button{width:100%;display:flex;align-items:center;gap:10px;padding:8px 4px;background:none;border:0;text-align:left}
+.mlist button:hover{background:var(--surface-2)}
+.mlist .sw{width:8px;height:22px;border-radius:3px;flex:none;background:var(--line)}
+.mlist .nm{font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mlist .sub{display:block;font:12px var(--mono);color:var(--muted);font-weight:400;overflow:hidden;text-overflow:ellipsis}
+.n-a{color:var(--add);font-weight:500;font-size:13px} .n-d{color:var(--del);font-weight:500;font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:3px 10px;font-size:13px}
+button.chip:hover{border-color:var(--edge)}
+.chip.chg{border-color:var(--accent);color:var(--accent)}
+.chip.rem{border-color:var(--del);color:var(--del);text-decoration:line-through}
+.chip.cyc{border-color:var(--del);color:var(--del)}
+.note{font-size:13px;color:var(--muted)}
+.decl{font-size:13px;color:var(--muted)}
+.decl code{font-size:12px;color:var(--ink)}
+.ok{color:var(--add);font-size:13px;margin:0}
+
+.check{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:0 0 10px}
+.check button.row{display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);padding:8px 12px}
+.check button.row:first-child{border-top:0}
+.check button.row:hover{background:var(--surface-2)}
+.row .main{font-size:13px}
+.row .sub{display:block;font:12px var(--mono);color:var(--muted);word-break:break-word}
+.chain{display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px;font:12px var(--mono);color:var(--muted);margin-top:2px}
+.chain span+span::before{content:"→ ";color:var(--edge)}
+
+.file{margin-top:16px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.fhead{display:flex;align-items:baseline;gap:8px;padding:10px 12px;background:var(--surface-2);flex-wrap:wrap}
+.fname{font:500 13px var(--mono);word-break:break-all;flex:1;min-width:0}
+.fname span{color:var(--muted);font-weight:400}
+.badge{font-size:11.5px;font-weight:500;padding:1px 7px;border-radius:5px;background:var(--surface-2);color:var(--muted)}
+.b-added{background:var(--add-bg);color:var(--add)} .b-removed{background:var(--del-bg);color:var(--del)}
+.b-modified,.b-renamed{background:var(--mod-bg);color:var(--mod)}
+.b-test{background:var(--accent-soft);color:var(--accent)}
+.sym{border-top:1px solid var(--line)}
+.sym>summary{list-style:none;display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;flex-wrap:wrap}
+.sym>summary::-webkit-details-marker{display:none}
+.sym>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s;flex:none;margin-right:2px}
+.sym[open]>summary::before{transform:rotate(45deg)}
+.sym>summary:hover{background:var(--surface-2)}
+.sname{font:500 13px var(--mono);word-break:break-all}
+.kind{font-size:12px;color:var(--muted)}
+.route{font:500 11.5px var(--mono);padding:1px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent)}
+.grow{flex:1}
+.sbody{padding:0 12px 12px}
+.linkbtn{border:0;background:none;color:var(--accent);padding:0;font-size:13px}
+.linkbtn:hover{text-decoration:underline}
+.diff{border:1px solid var(--line);border-radius:8px;overflow-x:auto;background:var(--bg);font:12px/1.55 var(--mono)}
+.dl{display:grid;grid-template-columns:3.4em 3.4em 1.4em max-content;min-width:100%;width:max-content}
+.dl span{white-space:pre;padding:0 6px}
+.dl .ln{color:var(--com);text-align:right;user-select:none;padding:0 6px 0 0}
+.dl.add{background:var(--add-bg)} .dl.add .sg{color:var(--add)}
+.dl.del{background:var(--del-bg)} .dl.del .sg{color:var(--del)}
+.dl.gap span{color:var(--com)}
+.tk-k{color:var(--kw)} .tk-s{color:var(--str)} .tk-d{color:var(--dec)} .tk-c{color:var(--com);font-style:italic}
+.sig{font:12px var(--mono);margin:8px 0;display:grid;grid-template-columns:auto 1fr;gap:2px 10px}
+.sig .l{color:var(--muted);font-family:var(--sans)}
+.sig .b{color:var(--del)} .sig .a{color:var(--add)}
+.refs{margin-top:10px}
+.refs h4{font-size:12.5px;font-weight:500;margin:0 0 6px;color:var(--muted)}
+.refs button{display:block;width:100%;text-align:left;background:none;border:0;border-left:2px solid var(--line);padding:3px 0 3px 10px;margin:0 0 3px;font:12.5px var(--mono);word-break:break-all}
+.refs button:hover{border-left-color:var(--accent)}
+.refs button small{color:var(--muted);font-family:var(--sans)}
+.refs button.inpr{border-left-color:var(--mod)}
+.tree{list-style:none;margin:0;padding:0 0 0 14px;border-left:1px dashed var(--line)}
+.tree.root{padding-left:0;border-left:0}
+.tree li{margin:2px 0}
+.tree button{background:none;border:0;padding:2px 4px;border-radius:5px;font:12.5px var(--mono);text-align:left;word-break:break-all}
+.tree button:hover{background:var(--surface-2)}
+.whole{border-top:1px solid var(--line)}
+.whole>summary{padding:8px 12px;font-size:13px;color:var(--muted);cursor:pointer}
+.foot{margin-top:28px;font-size:12.5px;color:var(--muted)}
+.empty{padding:40px;color:var(--muted)}
+
+@media (max-width: 960px){
+  body{height:auto;min-height:100%}
+  main{display:block}
+  .stage{height:62vh;min-height:360px}
+  .panel{border-left:0;border-top:1px solid var(--line);overflow:visible}
+  .top{padding:12px 16px}
+  .stagebar{padding:10px 16px 0}
+  .pin{padding:18px 16px 36px}
+  .search{flex:1 1 100%}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1 class="brand">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="2" width="8" height="6" rx="2" fill="var(--accent)"/><rect x="13" y="8" width="8" height="6" rx="2" fill="var(--mod)"/><rect x="1" y="14" width="8" height="6" rx="2" fill="var(--edge)"/><path d="M9 5h2a2 2 0 0 1 2 2v2M9 17h2a2 2 0 0 0 2-2v-2" stroke="var(--edge)" stroke-width="1.5" fill="none"/></svg>
+    dyff
+  </h1>
+  <p class="prtitle" id="prTitle"></p>
+  <div class="search">
+    <input id="q" type="search" placeholder="Find a class, method or route…" autocomplete="off" spellcheck="false" aria-label="Find a symbol">
+    <div class="results" id="results" hidden></div>
+  </div>
+</header>
+<main>
+  <section class="stage" aria-label="Module graph">
+    <div class="stagebar">
+      <label class="toggle" id="allWrap"><input type="checkbox" id="showAll"> Show all modules</label>
+      <label class="toggle"><input type="checkbox" id="showTests"> Count test files</label>
+      <div class="legend" aria-label="Legend">
+        <span><i style="background:var(--mod)"></i>Changed</span>
+        <span><i style="background:var(--add)"></i>New</span>
+        <span><i style="background:var(--del)"></i>Removed</span>
+        <span><i style="border:1.5px dashed var(--accent)"></i>Uses changed code</span>
+      </div>
+    </div>
+    <div class="canvas" id="canvas"></div>
+  </section>
+  <aside class="panel" id="panel" aria-label="Details"><div class="pin" id="pin"><p class="empty">Loading…</p></div></aside>
+</main>
+
+<script>
+(() => {
+'use strict';
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dirOf = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+const baseOf = p => p.slice(p.lastIndexOf('/') + 1);
+const short = id => id.includes('#') ? id.slice(id.indexOf('#') + 1) : baseOf(id);
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+let D, byId, modById, fileByPath, M;
+let selected = null, showAll = false, showTests = false, history = [];
+
+/* ---------- Model ---------- */
+function build() {
+  byId = new Map(D.nodes.map(n => [n.id, n]));
+  modById = new Map(D.modules.map(m => [m.id, m]));
+  fileByPath = new Map(D.files.map(f => [f.path, f]));
+  const C = D.checks;
+  const nodes = new Map();
+  for (const m of D.modules) nodes.set(m.id, { id: m.id, name: m.name, mod: m, files: [], adds: 0, dels: 0, out: new Map(), inn: new Set(), warn: 0 });
+  for (const f of D.files) {
+    const n = nodes.get(f.module); if (!n) continue;
+    if (f.change && (showTests || !f.test)) { n.files.push(f); n.adds += f.change.additions; n.dels += f.change.deletions; }
+  }
+  for (const d of C.danglingReferences) { const n = byId.get(d.from); if (n && nodes.has(n.module)) nodes.get(n.module).warn++; }
+
+  const cyc = new Map(); C.cycles.forEach((c, i) => c.forEach(m => cyc.set(m, i)));
+  const newKeys = new Set(C.newModuleDependencies.map(e => e.from + '>' + e.to));
+  const edges = new Map();
+  const add = (from, to, via, extra = {}) => {
+    if (!from || !to || from === to || !nodes.has(from) || !nodes.has(to)) return;
+    const k = from + '>' + to;
+    let e = edges.get(k);
+    if (!e) edges.set(k, e = { from, to, kinds: new Set(), changed: newKeys.has(k), removed: false, forwardRef: false, cycle: cyc.has(from) && cyc.get(from) === cyc.get(to) });
+    e.kinds.add(via); if (extra.forwardRef) e.forwardRef = true; if (extra.removed) e.removed = true;
+  };
+  for (const m of D.modules) if (m.change?.status !== 'removed') for (const im of m.imports) if (im.module) add(m.id, im.module, 'module-import', im);
+  for (const f of D.files) {
+    if (f.test || f.change?.status === 'removed') continue;
+    for (const im of f.imports) { if (im.typeOnly || !im.resolved) continue; const t = fileByPath.get(im.resolved); if (t) add(f.module, t.module, 'file-import'); }
+  }
+  for (const e of C.removedModuleDependencies) if (!edges.has(e.from + '>' + e.to)) add(e.from, e.to, e.via, { removed: true });
+  for (const e of edges.values()) { nodes.get(e.from).out.set(e.to, e); nodes.get(e.to).inn.add(e.from); }
+  const affected = new Set(C.summary.affectedModules);
+  for (const n of nodes.values()) {
+    n.changed = n.files.length > 0;
+    n.state = !n.changed ? 'none' : n.files.every(f => f.change.status === 'added') ? 'added' : n.files.every(f => f.change.status === 'removed') ? 'removed' : 'modified';
+    n.affected = !n.changed && affected.has(n.id);
+  }
+  M = { nodes, edges };
+}
+
+/* ---------- Graph ---------- */
+const W = 232, H = 78, CG = 92, RG = 22, PAD = 28;
+function visibleIds() {
+  const ids = new Set();
+  for (const n of M.nodes.values()) if (n.changed) ids.add(n.id);
+  if (showAll || !ids.size) for (const n of M.nodes.values()) ids.add(n.id);
+  else for (const id of [...ids]) { const n = M.nodes.get(id); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
+  if (selected && M.nodes.has(selected)) ids.add(selected);
+  for (const id of hot) ids.add(id);
+  return [...ids].filter(id => M.nodes.has(id));
+}
+function layout(ids) {
+  const set = new Set(ids), h = new Map();
+  const outs = id => [...M.nodes.get(id).out.keys()].filter(t => set.has(t));
+  const visit = (id, stack) => {
+    if (h.has(id)) return h.get(id); if (stack.has(id)) return 0;
+    stack.add(id); let d = 0; for (const t of outs(id)) d = Math.max(d, visit(t, stack) + 1); stack.delete(id);
+    h.set(id, d); return d;
+  };
+  ids.forEach(id => visit(id, new Set()));
+  const maxH = Math.max(0, ...h.values());
+  const cols = []; for (const id of ids) { const c = maxH - h.get(id); (cols[c] = cols[c] || []).push(id); }
+  const row = new Map(), pos = new Map();
+  cols.forEach(col => {
+    if (!col) return;
+    const score = id => { const ps = [...M.nodes.get(id).inn].filter(p => row.has(p)); return ps.length ? ps.reduce((a, p) => a + row.get(p), 0) / ps.length : 1e3; };
+    col.sort((a, b) => score(a) - score(b) || (M.nodes.get(b).changed - M.nodes.get(a).changed) || M.nodes.get(a).name.localeCompare(M.nodes.get(b).name));
+    col.forEach((id, ri) => row.set(id, ri));
+  });
+  const maxRows = Math.max(1, ...cols.map(c => c ? c.length : 0));
+  const fullH = maxRows * (H + RG) - RG;
+  cols.forEach((col, ci) => {
+    if (!col) return;
+    const off = (fullH - (col.length * (H + RG) - RG)) / 2;
+    col.forEach((id, ri) => pos.set(id, { x: PAD + ci * (W + CG), y: PAD + off + ri * (H + RG) }));
+  });
+  const col = new Map(); cols.forEach((c, ci) => c && c.forEach(id => col.set(id, ci)));
+  const bottom = cols.map(c => c ? Math.max(...c.map(id => pos.get(id).y + H)) : PAD);
+  return { pos, col, bottom, width: PAD * 2 + cols.length * (W + CG) - CG, height: PAD * 2 + fullH + 30 };
+}
+const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+let hot = new Set();
+function renderGraph() {
+  const cv = $('#canvas');
+  const ids = visibleIds();
+  if (!ids.length) { cv.innerHTML = '<p class="empty">No modules.</p>'; return; }
+  const L = layout(ids), { pos, col, bottom, width } = L;
+  let height = L.height;
+  const set = new Set(ids);
+  const focus = selected && M.nodes.has(selected) ? new Set([selected, ...M.nodes.get(selected).out.keys(), ...M.nodes.get(selected).inn]) : hot.size ? hot : null;
+  const vis = [...M.edges.values()].filter(e => set.has(e.from) && set.has(e.to));
+  const op = new Map(), ip = new Map();
+  const spread = (list, map) => { const k = list.length; list.forEach((e, i) => map.set(e, k < 2 ? 0 : (i - (k - 1) / 2) * Math.min(12, 44 / (k - 1)))); };
+  for (const id of ids) {
+    spread(vis.filter(e => e.from === id).sort((a, b) => pos.get(a.to).y - pos.get(b.to).y), op);
+    spread(vis.filter(e => e.to === id).sort((a, b) => pos.get(a.from).y - pos.get(b.from).y), ip);
+  }
+  let eh = '', lanes = 0;
+  for (const e of vis) {
+    const a = pos.get(e.from), b = pos.get(e.to), ca = col.get(e.from), cb = col.get(e.to);
+    let d;
+    const x1 = a.x + W, y1 = a.y + H / 2 + op.get(e), x2 = b.x - 6, y2 = b.y + H / 2 + ip.get(e);
+    if (cb === ca + 1) { const dx = (x2 - x1) / 2; d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`; }
+    else if (cb > ca + 1) {
+      const ly = Math.max(...bottom.slice(ca + 1, cb)) + 22 + 12 * lanes++;
+      height = Math.max(height, ly + PAD);
+      const gs = x1 + CG / 2, ge = b.x - CG / 2, k = CG * 0.42;
+      d = `M${x1},${y1} C${x1 + k},${y1} ${gs - 4},${ly} ${gs + 14},${ly} L${ge - 14},${ly} C${ge + 4},${ly} ${x2 - k},${y2} ${x2},${y2}`;
+    } else { const bx1 = a.x + W / 2, by1 = a.y + H, bx2 = b.x + W / 2 + 10, by2 = b.y + H + 6, lo = Math.max(by1, by2) + 40; height = Math.max(height, lo + PAD); d = `M${bx1},${by1} C${bx1},${lo} ${bx2},${lo} ${bx2},${by2}`; }
+    const dim = focus && !(selected ? (e.from === selected || e.to === selected) : (focus.has(e.from) && focus.has(e.to)));
+    const cls = ['edge', e.removed ? 'rem' : e.cycle ? 'cyc' : e.changed ? 'chg' : '', !e.kinds.has('module-import') ? 'imp' : '', dim ? 'dim' : ''].join(' ');
+    const mk = e.removed || e.cycle ? 'mr' : e.changed ? 'mc' : 'mn';
+    const title = `${M.nodes.get(e.from).name} → ${M.nodes.get(e.to).name}\n${e.kinds.has('module-import') ? '@Module import' : 'File import only'}${e.forwardRef ? ' (forwardRef)' : ''}${e.cycle ? '\nPart of a circular dependency' : ''}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : ''}`;
+    eh += `<path class="${cls}" d="${d}" marker-end="url(#${mk})"><title>${esc(title)}</title></path>`;
+  }
+  let nh = '';
+  for (const id of ids) {
+    const n = M.nodes.get(id), p = pos.get(id);
+    const cls = ['node', 's-' + n.state, n.affected ? 'affected' : '', !n.changed && !n.affected ? 'context' : '', id === selected ? 'sel' : '', hot.has(id) && id !== selected ? 'hot' : '', focus && !focus.has(id) ? 'dim' : ''].join(' ');
+    const meta = n.changed
+      ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${plural(n.files.length, 'file')}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
+      : n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? 'Uses changed code' : 'Unchanged';
+    nh += `<g class="${cls}" data-mod="${esc(id)}" tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
+      <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
+      <text class="nm" x="18" y="25">${esc(clip(n.name, 25))}</text>
+      <text class="pth" x="18" y="44">${esc(clip(n.id, 29))}</text>
+      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.name + '\n' + n.id)}</title></g>`;
+  }
+  const vw = Math.max(width, 300);
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" style="width:100%;max-width:${vw}px;min-width:${Math.round(vw * 0.62)}px" role="img" aria-label="Modules touched by this pull request">
+    <defs>${['mn', 'mc', 'mr'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
+    ${eh}${nh}</svg>`;
+}
+
+/* ---------- Panel helpers ---------- */
+const TOK = /(\/\/.*$)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)|(@[A-Za-z_]\w*)|\b(import|export|from|class|const|let|var|return|async|await|private|public|protected|readonly|constructor|new|if|else|throw|this|function|extends|implements|interface|type|static|for|of|in|true|false|null|undefined)\b/g;
+function hl(text) {
+  let out = '', last = 0, m; TOK.lastIndex = 0;
+  while ((m = TOK.exec(text))) {
+    out += esc(text.slice(last, m.index));
+    out += `<span class="${m[1] ? 'tk-c' : m[2] ? 'tk-s' : m[3] ? 'tk-d' : 'tk-k'}">${esc(m[0])}</span>`; last = TOK.lastIndex;
+    if (m[0] === '') TOK.lastIndex++;
+  }
+  return out + esc(text.slice(last));
+}
+function diffBlock(hunks) {
+  if (!hunks || !hunks.length) return '';
+  let html = '<div class="diff">';
+  hunks.forEach((h, i) => {
+    if (i) html += '<div class="dl gap"><span class="ln"></span><span class="ln"></span><span></span><span>⋯</span></div>';
+    for (const l of h.lines) {
+      const cls = l.t === '+' ? 'add' : l.t === '-' ? 'del' : '';
+      html += `<div class="dl ${cls}"><span class="ln">${l.o ?? ''}</span><span class="ln">${l.t === '-' ? '' : l.n ?? ''}</span><span class="sg">${l.t === ' ' ? '' : l.t === '-' ? '−' : '+'}</span><span>${hl(l.text) || ' '}</span></div>`;
+    }
+  });
+  return html + '</div>';
+}
+const counts = hunks => { let a = 0, d = 0; for (const h of hunks || []) for (const l of h.lines) { if (l.t === '+') a++; else if (l.t === '-') d++; } return { a, d }; };
+const statusWord = s => ({ added: 'new', removed: 'removed', modified: 'changed', renamed: 'renamed' }[s] || s);
+const kindWord = n => n.kind === 'file' ? 'imports and top-level code' : n.kind;
+const routeText = r => r.type !== 'http' ? `${r.verb} ${r.path}` : `${r.verb} ${D.globalPrefix ? '/' + [D.globalPrefix, r.fullPath].join('/').replace(/\/+/g, '/').replace(/^\/|\/$/g, '') : r.fullPath}`;
+const routeChip = r => `<span class="route">${esc(routeText(r))}</span>`;
+const symLabel = id => { const n = byId.get(id); return n && n.kind === 'file' ? baseOf(id) : short(id); };
+const inPr = id => { const n = byId.get(id); return !!(n && fileByPath.get(n.file)?.change); };
+const symBtn = (id, extra = '') => {
+  const n = byId.get(id);
+  const where = n ? `${n.file}${n.kind !== 'file' ? ':' + n.range[0] : ''}` : 'not found';
+  return `<button data-sym="${esc(id)}" class="${inPr(id) ? 'inpr' : ''}">${esc(symLabel(id))} <small>${esc(where)}${inPr(id) ? ' · in this PR' : ''}${extra}</small></button>`;
+};
+const modName = id => modById.get(id)?.name || id;
+const tokenLabel = t => t.startsWith('"') ? t : short(t);
+
+/* ---------- Summary ---------- */
+function renderSummary() {
+  const C = D.checks, S = C.summary;
+  const changed = [...M.nodes.values()].filter(n => n.changed).sort((a, b) => (b.adds + b.dels) - (a.adds + a.dels));
+  const affected = [...M.nodes.values()].filter(n => n.affected);
+  const li = n => `<li><button data-mod="${esc(n.id)}"><span class="sw" style="background:${n.changed ? `var(--${n.state === 'added' ? 'add' : n.state === 'removed' ? 'del' : 'mod'})` : 'var(--accent)'}"></span><span class="nm">${esc(n.name)}<span class="sub">${esc(n.id)}</span></span>${n.changed ? `<span class="n-a">+${n.adds}</span><span class="n-d">−${n.dels}</span>` : ''}</button></li>`;
+  const section = (title, items, render, warn) => `<h3>${title}<span class="count ${warn && items.length ? 'warn' : ''}">${items.length}</span></h3>${items.length ? `<div class="check">${items.map(render).join('')}</div>` : '<p class="ok">None</p>'}`;
+  const sigs = C.signatureChanges.filter(s => s.callersOutsidePr.length);
+  const changedSyms = D.nodes.filter(n => n.change && n.kind !== 'file' && !n.test);
+  $('#pin').innerHTML = `
+    <h2>${esc(title())}</h2>
+    <p class="path">${esc(D.root)}</p>
+    <div class="stats">
+      <div><b>${S.filesChanged}</b><span>files</span></div>
+      <div><b><span class="n-a">+${S.additions}</span> <span class="n-d">−${S.deletions}</span></b><span>lines</span></div>
+      <div><b>${changedSyms.length}</b><span>symbols changed</span></div>
+      <div><b>${changed.length}</b><span>modules changed</span></div>
+      ${affected.length ? `<div><b>${affected.length}</b><span>use changed code</span></div>` : ''}
+    </div>
+    <h3>Review checks</h3>
+    ${section('Broken references', C.danglingReferences, d => `<button class="row" data-sym="${esc(d.from)}"><span class="main"><code>${esc(symLabel(d.from))}</code> still uses <code>${esc(symLabel(d.to))}</code>${d.maybeRenamedTo ? `, renamed to <code>${esc(symLabel(d.maybeRenamedTo))}</code>?` : ''}</span><span class="sub">${esc(d.file)}</span></button>`, true)}
+    ${section('Signature changes with callers outside the PR', sigs, s => `<button class="row" data-sym="${esc(s.id)}"><span class="main"><code>${esc(symLabel(s.id))}</code>: ${plural(s.callersOutsidePr.length, 'caller')} to check</span><span class="sub">${esc(s.before)} → ${esc(s.after)}</span></button>`, true)}
+    ${section('New circular dependencies', C.newCycles, c => `<button class="row" data-mod="${esc(c[0])}"><span class="main">${c.map(m => esc(modName(m))).join(' ⇄ ')}</span></button>`, true)}
+    ${section('New module dependencies', C.newModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via === 'module-import' ? '@Module import' : 'file import'}${e.forwardRef ? ', forwardRef' : ''}</span></button>`)}
+    ${C.removedModuleDependencies.length ? section('Removed module dependencies', C.removedModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via}</span></button>`) : ''}
+    ${section('Affected routes', C.affectedRoutes, r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(id => `<span>${esc(symLabel(id))}</span>`).join('')}</span></button>`)}
+    ${section('Changed code no test reaches', C.untested, id => `<button class="row" data-sym="${esc(id)}"><span class="main"><code>${esc(symLabel(id))}</code></span><span class="sub">${esc(byId.get(id)?.file)}</span></button>`, false)}
+    <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
+    ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
+    <p class="foot">Select a module in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Solid arrows are <code>@Module</code> imports, dotted ones are file imports only; red arrows are part of a cycle.</p>`;
+}
+
+/* ---------- Module ---------- */
+function renderModule(id) {
+  const n = M.nodes.get(id), m = n.mod;
+  const outs = [...n.out.values()], ins = [...n.inn].map(f => M.nodes.get(f).out.get(id));
+  const chip = (e, other) => `<button class="chip ${e.removed ? 'rem' : e.cycle ? 'cyc' : e.changed ? 'chg' : ''}" data-mod="${esc(other)}" title="${e.removed ? 'Removed in this PR' : e.cycle ? 'Part of a cycle' : e.changed ? 'New in this PR' : ''}">${esc(M.nodes.get(other).name)}${e.kinds.has('module-import') ? '' : ' (file)'}</button>`;
+  let why;
+  if (n.changed) why = `${plural(n.files.length, 'file')} ${n.state === 'added' ? 'added' : n.state === 'removed' ? 'removed' : 'changed'} in this PR.`;
+  else if (n.affected) why = 'Not changed in this PR, but its code references something that did. Worth a look when reviewing.';
+  else why = 'Not changed in this PR.';
+  const declHtml = m.declared ? [
+    ['Providers', m.providers.map(p => p.via === 'class' ? short(p.token) : `${tokenLabel(p.token)} → ${p.target ? short(p.target) : p.via}`)],
+    ['Controllers', m.controllers.map(tokenLabel)],
+    ['Exports', m.exports.map(tokenLabel)],
+    ['External imports', m.imports.filter(i => i.external).map(i => i.name + (i.dynamic ? '.' + i.dynamic + '()' : ''))],
+  ].filter(([, xs]) => xs.length).map(([k, xs]) => `<p class="decl">${k}: ${xs.map(x => `<code>${esc(x)}</code>`).join(', ')}</p>`).join('') : '<p class="decl">No <code>*.module.ts</code> here; files in this folder are grouped by location.</p>';
+  const broken = D.checks.danglingReferences.filter(d => byId.get(d.from)?.module === id);
+  const files = n.files.slice().sort((a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions)).map(f => {
+    const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
+    const symHtml = syms.map(s => {
+      const c = counts(s.change.hunks);
+      return `<details class="sym"${syms.length <= 4 ? ' open' : ''}><summary><span class="sname">${esc(s.kind === 'file' ? 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
+        <div class="sbody">${diffBlock(s.change.hunks)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
+    }).join('');
+    return `<section class="file"><div class="fhead"><span class="badge b-${f.change.status}">${statusWord(f.change.status)}</span>${f.test ? '<span class="badge b-test">test</span>' : ''}<span class="fname">${esc(baseOf(f.path))} <span>${esc(dirOf(f.path))}</span></span><span class="n-a">+${f.change.additions}</span><span class="n-d">−${f.change.deletions}</span></div>
+      ${f.change.oldPath ? `<p class="note" style="padding:6px 12px 0;margin:0">Renamed from ${esc(f.change.oldPath)}</p>` : ''}
+      ${symHtml}
+      ${f.change.hunks.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(f.change.hunks)}</div></details>` : ''}</section>`;
+  }).join('');
+  const routes = D.nodes.filter(s => s.module === id && s.route);
+  $('#pin').innerHTML = `
+    <button class="back" data-action="back">← Back</button>
+    <h2>${esc(n.name)}</h2><p class="path">${esc(m.file || n.id)}</p>
+    <p class="lead">${esc(why)}</p>${declHtml}
+    ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => symBtn(d.from, ` · uses removed ${esc(symLabel(d.to))}`)).join('')}</div>` : ''}
+    ${outs.length ? `<h3>Depends on</h3><div class="chips">${outs.map(e => chip(e, e.to)).join('')}</div>` : ''}
+    ${ins.length ? `<h3>Used by</h3><div class="chips">${ins.map(e => chip(e, e.from)).join('')}</div>` : ''}
+    ${routes.length ? `<h3>Routes</h3><div class="refs">${routes.map(r => `<button data-sym="${esc(r.id)}">${esc(routeText(r.route))} <small>${esc(short(r.id))}</small></button>`).join('')}</div>` : ''}
+    ${n.files.length ? `<h3>What changed</h3>${files}` : ''}`;
+}
+
+/* ---------- Symbol focus ---------- */
+function tree(id, dir, depth, seen) {
+  if (depth === 0) return '';
+  const next = (dir === 'up' ? byId.get(id)?.references : byId.get(id)?.uses) || [];
+  const items = next.filter(x => byId.has(x) && !seen.has(x));
+  if (!items.length) return '';
+  items.forEach(x => seen.add(x));
+  return `<ul class="tree${seen.size === items.length + 1 ? ' root' : ''}">${items.slice(0, 30).map(x => {
+    const n = byId.get(x);
+    return `<li><button data-sym="${esc(x)}">${esc(symLabel(x))}${n.route ? ' ' + routeChip(n.route) : ''}${n.change ? ` <span class="badge b-${n.change.status}">${statusWord(n.change.status)}</span>` : ''}${n.test ? ' <span class="badge b-test">test</span>' : ''}</button>${tree(x, dir, depth - 1, seen)}</li>`;
+  }).join('')}${items.length > 30 ? `<li class="note">…and ${items.length - 30} more</li>` : ''}</ul>`;
+}
+function renderSymbol(id) {
+  const n = byId.get(id);
+  if (!n) return;
+  const C = D.checks;
+  const ch = n.change;
+  const routes = C.affectedRoutes.filter(r => r.changed === id || r.chain.includes(id));
+  const tests = C.tests.find(t => t.id === id);
+  const sig = C.signatureChanges.find(s => s.id === id);
+  const broken = C.danglingReferences.filter(d => d.from === id || d.to === id);
+  const typeOnly = new Set(n.typeUses || []);
+  const children = D.nodes.filter(c => c.parent === id);
+  $('#pin').innerHTML = `
+    <button class="back" data-action="back">← Back</button>
+    <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
+    <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button></p>
+    <div class="chips" style="margin-bottom:10px">${ch ? `<span class="badge b-${ch.status}">${statusWord(ch.status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
+    ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
+    ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
+    ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
+    ${ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks)}` : ''}
+    ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
+    ${tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : ''}
+    ${n.injects ? `<h3>Injects</h3><div class="refs">${n.injects.map(i => i.target ? symBtn(i.target, ` · ${esc(i.param)}${i.kind !== 'class' ? ' via ' + esc(i.decorator || 'token') + ' ' + esc(tokenLabel(i.token)) : ''}`) : `<button disabled>${esc(i.param)} <small>${esc(tokenLabel(i.token))}</small></button>`).join('')}</div>` : ''}
+    <h3>Called from<span class="count">${n.references.length}</span></h3>
+    ${n.references.length ? `<p class="note">Callers, and their callers, up to 3 steps.</p>${tree(id, 'up', 3, new Set([id]))}` : '<p class="note">Nothing references this.</p>'}
+    <h3>Uses<span class="count">${n.uses.length}</span></h3>
+    ${n.uses.length ? `<div class="refs">${n.uses.map(u => byId.has(u) ? symBtn(u, typeOnly.has(u) ? ' · type only' : '') : '').join('')}</div>` : '<p class="note">No references to other project code.</p>'}
+    ${children.length ? `<h3>Members<span class="count">${children.length}</span></h3><div class="refs">${children.map(c => symBtn(c.id, c.change ? ' · ' + statusWord(c.change.status) : '')).join('')}</div>` : ''}`;
+}
+
+/* ---------- Navigation ---------- */
+let view = { type: 'summary' };
+function go(next, push = true) {
+  if (push) history.push(view);
+  view = next;
+  selected = view.type === 'module' ? view.id : null;
+  hot = new Set();
+  if (view.type === 'symbol') {
+    const n = byId.get(view.id);
+    if (n) { hot.add(n.module); for (const r of n.references) hot.add(byId.get(r)?.module); for (const u of n.uses) hot.add(byId.get(u)?.module); hot.delete(undefined); }
+  }
+  if (view.type === 'summary') renderSummary();
+  else if (view.type === 'module') renderModule(view.id);
+  else renderSymbol(view.id);
+  renderGraph();
+  $('#panel').scrollTop = 0;
+  if (view.type !== 'summary' && window.matchMedia('(max-width: 960px)').matches) $('#panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+const back = () => go(history.pop() || { type: 'summary' }, false);
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-mod],[data-sym],[data-action]');
+  if (!b || b.disabled) return;
+  if (b.closest('#results')) { $('#results').hidden = true; $('#q').value = ''; }
+  if (b.dataset.action === 'back') back();
+  else if (b.dataset.sym) go({ type: 'symbol', id: b.dataset.sym });
+  else if (b.dataset.mod) go(selected === b.dataset.mod ? { type: 'summary' } : { type: 'module', id: b.dataset.mod });
+});
+$('#canvas').addEventListener('click', e => { if (!e.target.closest('.node') && view.type !== 'summary') go({ type: 'summary' }); });
+$('#canvas').addEventListener('keydown', e => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); g.dispatchEvent(new MouseEvent('click', { bubbles: true })); } });
+$('#showAll').addEventListener('change', e => { showAll = e.target.checked; renderGraph(); });
+$('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && view.type !== 'summary' && document.activeElement !== $('#q')) back(); });
+
+/* ---------- Search ---------- */
+let searchIndex = [];
+$('#q').addEventListener('input', () => {
+  const q = $('#q').value.trim().toLowerCase(), box = $('#results');
+  if (q.length < 2) { box.hidden = true; return; }
+  const hits = searchIndex.filter(s => s.key.includes(q)).sort((a, b) => (a.key.indexOf(q) - b.key.indexOf(q)) || a.label.length - b.label.length).slice(0, 30);
+  box.innerHTML = hits.length ? hits.map((h, i) => `<button ${h.mod ? `data-mod="${esc(h.mod)}"` : `data-sym="${esc(h.id)}"`} class="${i ? '' : 'on'}">${esc(h.label)}<small>${esc(h.sub)}</small></button>`).join('') : '<p class="note" style="padding:6px 8px;margin:0">No matches</p>';
+  box.hidden = false;
+});
+$('#q').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const b = $('#results button.on'); if (b) b.click(); }
+  if (e.key === 'Escape') { $('#q').value = ''; $('#results').hidden = true; }
+});
+document.addEventListener('click', e => { if (!e.target.closest('.search')) $('#results').hidden = true; });
+
+function title() {
+  const pr = D.pr || {};
+  return pr.baseRef ? `Changes against ${pr.baseRef}` : 'Pull request';
+}
+
+/* ---------- Load ---------- */
+fetch('index.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(data => {
+  D = data;
+  if (!D.checks) { $('#pin').innerHTML = '<p class="empty">This index has no PR checks. Serve the output of <code>dyff merge</code> or <code>dyff pr</code>.</p>'; return; }
+  const pr = D.pr || {};
+  $('#prTitle').innerHTML = `${esc(baseOf(D.root))} · ${esc(title())}${pr.headCommit ? `<small>${esc(pr.baseCommit?.slice(0, 7) || '')}…${esc(pr.headCommit.slice(0, 7))}</small>` : ''}`;
+  document.title = `dyff · ${baseOf(D.root)}`;
+  searchIndex = [
+    ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
+    ...D.modules.map(m => ({ mod: m.id, label: m.name, sub: m.id, key: (m.name + ' ' + m.id).toLowerCase() })),
+  ];
+  build();
+  go({ type: 'summary' }, false);
+}).catch(err => { $('#pin').innerHTML = `<p class="empty">Could not load index.json (${esc(err.message)}).</p>`; });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,47 @@
+{
+  "name": "dyff",
+  "version": "0.1.0",
+  "description": "Index a NestJS codebase into a symbol/reference graph and overlay pull requests on it: changed symbols, broken callers, affected routes, module cycles and test reach.",
+  "keywords": [
+    "nestjs",
+    "pull-request",
+    "code-review",
+    "ts-morph",
+    "call-graph",
+    "dependency-graph"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "dyff": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "viewer",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "ts-morph": "^28.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9.3"
+  }
+}

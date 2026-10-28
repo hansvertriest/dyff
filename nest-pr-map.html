@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nest PR map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E8ECF0; --surface:#F8FAFB; --surface-2:#EEF2F5; --ink:#18202B; --muted:#5A6574; --line:#CBD3DC; --edge:#9AA5B3;
+  --accent:#3B4FD8; --accent-soft:#E2E6FB;
+  --add:#17804F; --add-bg:#DCF2E5; --del:#B83A33; --del-bg:#F8E0DD; --mod:#9C5F08; --mod-bg:#F5E9D2;
+  --kw:#7A3BB8; --str:#1E7A6E; --dec:#A8530F; --com:#7C8794;
+  --sans:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#11151B; --surface:#192029; --surface-2:#202833; --ink:#E3E8EE; --muted:#8E99A8; --line:#2D3744; --edge:#556172;
+    --accent:#93A1FF; --accent-soft:#252C4F;
+    --add:#4FC48C; --add-bg:#16301F; --del:#F08A80; --del-bg:#3A1E1C; --mod:#E2AA4C; --mod-bg:#372A13;
+    --kw:#C79BFF; --str:#6DD3C2; --dec:#F0A963; --com:#76818F;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#11151B; --surface:#192029; --surface-2:#202833; --ink:#E3E8EE; --muted:#8E99A8; --line:#2D3744; --edge:#556172;
+  --accent:#93A1FF; --accent-soft:#252C4F;
+  --add:#4FC48C; --add-bg:#16301F; --del:#F08A80; --del-bg:#3A1E1C; --mod:#E2AA4C; --mod-bg:#372A13;
+  --kw:#C79BFF; --str:#6DD3C2; --dec:#F0A963; --com:#76818F;
+  color-scheme: dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+[hidden]{display:none !important}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);display:flex;flex-direction:column}
+button,input,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+a{color:var(--accent)}
+
+/* Header */
+.top{padding:14px 20px 12px;border-bottom:1px solid var(--line);background:var(--surface);display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.brand{font-weight:600;font-size:17px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px;margin:0}
+.brand svg{flex:none}
+.load{display:flex;gap:8px;flex:1 1 420px;min-width:0}
+.load input{flex:1;min-width:0;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 14px;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--edge)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .btn.primary{color:#11151B}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .btn.primary{color:#11151B}}
+.btn.quiet{border-color:transparent;background:transparent;color:var(--muted);padding:6px 8px}
+.btn.quiet:hover{color:var(--ink)}
+.extras{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.token{position:relative}
+.token summary{list-style:none;color:var(--muted);padding:6px 8px;border-radius:8px;cursor:pointer}
+.token summary::-webkit-details-marker{display:none}
+.token summary:hover{color:var(--ink)}
+.token .pop{position:absolute;right:0;top:100%;z-index:5;width:min(340px,86vw);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;margin-top:6px;box-shadow:0 8px 24px rgba(15,20,30,.14)}
+.token .pop p{margin:0 0 10px;color:var(--muted);font-size:13px}
+.token input[type=password]{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:7px;background:var(--bg);font-family:var(--mono);font-size:13px}
+.token label{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:13px}
+.status{width:100%;font-size:13px;color:var(--muted);min-height:0}
+.status:empty{display:none}
+.status.error{color:var(--del)}
+
+/* Layout */
+main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 460px}
+.stage{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
+.stagebar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:12px 20px 0}
+.prtitle{font-weight:600;font-size:15px;margin:0;flex:1 1 240px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prtitle small{font-weight:400;color:var(--muted);margin-left:6px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.canvas{flex:1;min-height:0;overflow:auto;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
+.canvas svg{display:block;height:auto}
+
+/* Graph */
+.node{cursor:pointer}
+.node rect.box{fill:var(--surface);stroke:var(--line);stroke-width:1}
+.node:hover rect.box{stroke:var(--edge)}
+.node.sel rect.box{stroke:var(--accent);stroke-width:2}
+.node.affected rect.box{stroke:var(--accent);stroke-dasharray:5 4}
+.node.context rect.box{fill:var(--surface-2)}
+.node .bar{fill:var(--line)}
+.node.s-modified .bar{fill:var(--mod)}
+.node.s-added .bar{fill:var(--add)}
+.node.s-removed .bar{fill:var(--del)}
+.node.affected .bar{fill:var(--accent)}
+.node .nm{font:600 14px var(--sans);fill:var(--ink)}
+.node .pth{font:12px var(--mono);fill:var(--muted)}
+.node .meta{font:500 12px var(--sans);fill:var(--muted)}
+.node .meta .a{fill:var(--add)} .node .meta .d{fill:var(--del)}
+.node:focus{outline:none}
+.node:focus-visible rect.box{stroke:var(--accent);stroke-width:2}
+.edge{fill:none;stroke:var(--edge);stroke-width:1.4}
+.edge.imp{stroke-dasharray:3 4}
+.edge.chg{stroke:var(--accent);stroke-width:2.2}
+.edge.rem{stroke:var(--del);stroke-dasharray:6 4;stroke-width:2}
+.dim{opacity:.22}
+.node,.edge{transition:opacity .15s}
+@media (prefers-reduced-motion: reduce){.node,.edge{transition:none}}
+.mk-n{fill:var(--edge)} .mk-c{fill:var(--accent)} .mk-r{fill:var(--del)}
+
+/* Source sheet */
+.sheet{margin:14px 20px 0;padding:16px 18px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.sheet[hidden]{display:none}
+.sheet h2{font-size:16px;margin:0 0 6px}
+.sheet p{margin:0 0 10px;color:var(--muted);max-width:68ch}
+.sheet ol{margin:0 0 12px;padding-left:20px;color:var(--muted);max-width:68ch}
+.sheet textarea{width:100%;min-height:150px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:12.5px/1.5 var(--mono);resize:vertical}
+.sheet .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+
+/* Panel */
+.panel{border-left:1px solid var(--line);background:var(--surface);overflow:auto;min-height:0}
+.pin{padding:20px 22px 40px}
+.panel h2{font-size:22px;line-height:1.25;margin:0 0 2px;letter-spacing:-.01em;word-break:break-word}
+.panel h3{font-size:14px;margin:22px 0 8px}
+.panel .path{font:12.5px var(--mono);color:var(--muted);margin:0 0 10px;word-break:break-all}
+.panel p{margin:0 0 10px;max-width:62ch}
+.lead{color:var(--muted)}
+.back{margin:-4px 0 12px -8px}
+.stats{display:flex;gap:18px;margin:12px 0 4px;flex-wrap:wrap}
+.stats div{display:flex;flex-direction:column}
+.stats b{font-size:20px;font-weight:600}
+.stats div>span{font-size:12px;color:var(--muted)}
+.stats b .n-a,.stats b .n-d{font-size:20px;font-weight:600}
+.mlist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.mlist li{border-bottom:1px solid var(--line)}
+.mlist button{width:100%;display:flex;align-items:center;gap:10px;padding:9px 4px;background:none;border:0;text-align:left}
+.mlist button:hover{background:var(--surface-2)}
+.mlist .sw{width:8px;height:22px;border-radius:3px;flex:none;background:var(--line)}
+.mlist .nm{font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.n-a{color:var(--add);font-weight:500;font-size:13px} .n-d{color:var(--del);font-weight:500;font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:3px 10px;font-size:13px}
+button.chip:hover{border-color:var(--edge)}
+.chip.chg{border-color:var(--accent);color:var(--accent)}
+.chip.rem{border-color:var(--del);color:var(--del);text-decoration:line-through}
+.note{font-size:13px;color:var(--muted)}
+.decl{font-size:13px;color:var(--muted)}
+.decl code{font-family:var(--mono);font-size:12px;color:var(--ink)}
+
+.file{margin-top:16px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.fhead{display:flex;align-items:baseline;gap:8px;padding:10px 12px;background:var(--surface-2);flex-wrap:wrap}
+.fname{font:500 13px var(--mono);word-break:break-all;flex:1;min-width:0}
+.fname span{color:var(--muted);font-weight:400}
+.badge{font-size:11.5px;font-weight:500;padding:1px 7px;border-radius:5px}
+.b-added{background:var(--add-bg);color:var(--add)} .b-removed{background:var(--del-bg);color:var(--del)}
+.b-modified,.b-renamed{background:var(--mod-bg);color:var(--mod)}
+.sym{border-top:1px solid var(--line)}
+.sym>summary{list-style:none;display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;flex-wrap:wrap}
+.sym>summary::-webkit-details-marker{display:none}
+.sym>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s;flex:none;margin-right:2px}
+.sym[open]>summary::before{transform:rotate(45deg)}
+.sym>summary:hover{background:var(--surface-2)}
+.sname{font:500 13px var(--mono);word-break:break-all}
+.kind{font-size:12px;color:var(--muted)}
+.route{font:500 11.5px var(--mono);padding:1px 6px;border-radius:5px;background:var(--accent-soft);color:var(--accent)}
+.sym .grow{flex:1}
+.cnt{white-space:nowrap}
+.sbody{padding:0 12px 12px}
+.diff{border:1px solid var(--line);border-radius:8px;overflow-x:auto;background:var(--bg);font:12px/1.55 var(--mono)}
+.diff+.diff{margin-top:8px}
+.dl{display:grid;grid-template-columns:3.4em 3.4em 1.4em max-content;min-width:100%;width:max-content}
+.dl span{white-space:pre;padding:0 6px}
+.dl .ln{color:var(--com);text-align:right;user-select:none;padding:0 6px 0 0}
+.dl.add{background:var(--add-bg)} .dl.add .sg{color:var(--add)}
+.dl.del{background:var(--del-bg)} .dl.del .sg{color:var(--del)}
+.dl.gap span{color:var(--com)}
+.tk-k{color:var(--kw)} .tk-s{color:var(--str)} .tk-d{color:var(--dec)} .tk-c{color:var(--com);font-style:italic}
+.refs{margin-top:10px}
+.refs h4{font-size:12.5px;font-weight:500;margin:0 0 6px;color:var(--muted)}
+.refs button{display:block;width:100%;text-align:left;background:none;border:0;border-left:2px solid var(--line);padding:4px 0 4px 10px;margin:0 0 4px}
+.refs button:hover{border-left-color:var(--accent)}
+.refs .rf{font-size:12.5px} .refs code{display:block;font:12px var(--mono);color:var(--muted);white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.whole{border-top:1px solid var(--line)}
+.whole>summary{padding:8px 12px;font-size:13px;color:var(--muted);cursor:pointer}
+.whole .sbody{padding-top:0}
+.panel .foot{margin-top:28px;font-size:12.5px;color:var(--muted)}
+
+@media (max-width: 900px){
+  body{height:auto;min-height:100%}
+  main{display:block}
+  .stage{height:62vh;min-height:360px}
+  .panel{border-left:0;border-top:1px solid var(--line);overflow:visible}
+  .top{padding:12px 14px}
+  .stagebar{padding:10px 14px 0}
+  .sheet{margin:12px 14px 0}
+  .pin{padding:18px 16px 36px}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1 class="brand">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="2" width="8" height="6" rx="2" fill="var(--accent)"/><rect x="13" y="8" width="8" height="6" rx="2" fill="var(--mod)"/><rect x="1" y="14" width="8" height="6" rx="2" fill="var(--edge)"/><path d="M9 5h2a2 2 0 0 1 2 2v2M9 17h2a2 2 0 0 0 2-2v-2" stroke="var(--edge)" stroke-width="1.5" fill="none"/></svg>
+    Nest PR map
+  </h1>
+  <form class="load" id="loadForm">
+    <input id="prUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/owner/repo/pull/123" aria-label="Pull request link">
+    <button class="btn primary" type="submit">Map this PR</button>
+  </form>
+  <div class="extras">
+    <button class="btn quiet" type="button" id="pasteBtn">Paste a diff</button>
+    <button class="btn quiet" type="button" id="exampleBtn">Example</button>
+    <details class="token">
+      <summary>GitHub token</summary>
+      <div class="pop">
+        <p>Needed for private repos, and raises GitHub’s limit of 60 requests an hour. A fine-grained token with read access to contents and pull requests is enough.</p>
+        <input type="password" id="token" placeholder="github_pat_…" autocomplete="off" aria-label="GitHub token">
+        <label><input type="checkbox" id="remember"> Remember on this device</label>
+      </div>
+    </details>
+  </div>
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+</header>
+
+<main>
+  <section class="stage" aria-label="Module graph">
+    <div class="sheet" id="sheet" hidden>
+      <h2 id="sheetTitle">Paste the PR’s diff</h2>
+      <p id="sheetMsg">Paste the output of <code>git diff main...your-branch</code>, or the .diff version of a GitHub pull request.</p>
+      <ol id="sheetSteps" hidden></ol>
+      <textarea id="diffInput" spellcheck="false" placeholder="diff --git a/src/users/users.service.ts b/src/users/users.service.ts&#10;…" aria-label="Diff text"></textarea>
+      <div class="row">
+        <button class="btn primary" type="button" id="diffGo">Map this diff</button>
+        <a class="btn" id="diffLink" target="_blank" rel="noopener" hidden>Open the diff on GitHub</a>
+        <button class="btn" type="button" id="dlBtn" hidden>Download this tool</button>
+        <button class="btn quiet" type="button" id="sheetClose">Close</button>
+      </div>
+    </div>
+    <div class="stagebar">
+      <p class="prtitle" id="prTitle"></p>
+      <label class="toggle" id="allWrap" hidden><input type="checkbox" id="showAll"> Show all modules</label>
+      <div class="legend" aria-label="Legend">
+        <span><i style="background:var(--mod)"></i>Changed</span>
+        <span><i style="background:var(--add)"></i>New</span>
+        <span><i style="background:var(--del)"></i>Removed</span>
+        <span><i style="border:1.5px dashed var(--accent)"></i>Uses changed code</span>
+      </div>
+    </div>
+    <div class="canvas" id="canvas"></div>
+  </section>
+  <aside class="panel" id="panel" aria-label="Details"><div class="pin" id="pin"></div></aside>
+</main>
+
+<script type="text/plain" id="sample">
+diff --git a/src/app.module.ts b/src/app.module.ts
+index 3f2a1c4..8b7d9e0 100644
+--- a/src/app.module.ts
++++ b/src/app.module.ts
+@@ -1,15 +1,17 @@
+ import { Module } from '@nestjs/common';
+ import { ConfigModule } from '@nestjs/config';
+ import { TypeOrmModule } from '@nestjs/typeorm';
+ import { UsersModule } from './users/users.module';
+ import { OrdersModule } from './orders/orders.module';
++import { AuthModule } from './auth/auth.module';
+ 
+ @Module({
+   imports: [
+     ConfigModule.forRoot({ isGlobal: true }),
+     TypeOrmModule.forRoot(),
+     UsersModule,
+     OrdersModule,
++    AuthModule,
+   ],
+ })
+ export class AppModule {}
+diff --git a/src/auth/auth.module.ts b/src/auth/auth.module.ts
+new file mode 100644
+index 0000000..a1b2c3d
+--- /dev/null
++++ b/src/auth/auth.module.ts
+@@ -0,0 +1,20 @@
++import { Module } from '@nestjs/common';
++import { JwtModule } from '@nestjs/jwt';
++import { UsersModule } from '../users/users.module';
++import { AuthService } from './auth.service';
++import { AuthController } from './auth.controller';
++import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
++
++@Module({
++  imports: [
++    UsersModule,
++    JwtModule.register({
++      secret: process.env.JWT_SECRET,
++      signOptions: { expiresIn: '1h' },
++    }),
++  ],
++  providers: [AuthService, JwtAuthGuard],
++  controllers: [AuthController],
++  exports: [AuthService, JwtAuthGuard],
++})
++export class AuthModule {}
+diff --git a/src/auth/auth.service.ts b/src/auth/auth.service.ts
+new file mode 100644
+index 0000000..b2c3d4e
+--- /dev/null
++++ b/src/auth/auth.service.ts
+@@ -0,0 +1,25 @@
++import { Injectable, UnauthorizedException } from '@nestjs/common';
++import { JwtService } from '@nestjs/jwt';
++import * as bcrypt from 'bcrypt';
++import { UsersService } from '../users/users.service';
++
++@Injectable()
++export class AuthService {
++  constructor(
++    private readonly usersService: UsersService,
++    private readonly jwtService: JwtService,
++  ) {}
++
++  async validateUser(email: string, password: string) {
++    const user = await this.usersService.findByEmail(email);
++    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
++      throw new UnauthorizedException('Invalid credentials');
++    }
++    return user;
++  }
++
++  async login(email: string, password: string) {
++    const user = await this.validateUser(email, password);
++    return { accessToken: this.jwtService.sign({ sub: user.id }) };
++  }
++}
+diff --git a/src/auth/auth.controller.ts b/src/auth/auth.controller.ts
+new file mode 100644
+index 0000000..c3d4e5f
+--- /dev/null
++++ b/src/auth/auth.controller.ts
+@@ -0,0 +1,14 @@
++import { Body, Controller, HttpCode, Post } from '@nestjs/common';
++import { AuthService } from './auth.service';
++import { LoginDto } from './dto/login.dto';
++
++@Controller('auth')
++export class AuthController {
++  constructor(private readonly authService: AuthService) {}
++
++  @Post('login')
++  @HttpCode(200)
++  login(@Body() dto: LoginDto) {
++    return this.authService.login(dto.email, dto.password);
++  }
++}
+diff --git a/src/auth/dto/login.dto.ts b/src/auth/dto/login.dto.ts
+new file mode 100644
+index 0000000..d4e5f6a
+--- /dev/null
++++ b/src/auth/dto/login.dto.ts
+@@ -0,0 +1,10 @@
++import { IsEmail, IsString, MinLength } from 'class-validator';
++
++export class LoginDto {
++  @IsEmail()
++  email: string;
++
++  @IsString()
++  @MinLength(8)
++  password: string;
++}
+diff --git a/src/common/guards/jwt-auth.guard.ts b/src/common/guards/jwt-auth.guard.ts
+new file mode 100644
+index 0000000..e5f6a7b
+--- /dev/null
++++ b/src/common/guards/jwt-auth.guard.ts
+@@ -0,0 +1,15 @@
++import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
++import { JwtService } from '@nestjs/jwt';
++
++@Injectable()
++export class JwtAuthGuard implements CanActivate {
++  constructor(private readonly jwtService: JwtService) {}
++
++  canActivate(context: ExecutionContext): boolean {
++    const request = context.switchToHttp().getRequest();
++    const token = request.headers.authorization?.replace('Bearer ', '');
++    if (!token) return false;
++    request.user = this.jwtService.verify(token);
++    return true;
++  }
++}
+diff --git a/src/users/users.service.ts b/src/users/users.service.ts
+index 5d6e7f8..9a0b1c2 100644
+--- a/src/users/users.service.ts
++++ b/src/users/users.service.ts
+@@ -1,8 +1,9 @@
+ import { Injectable, NotFoundException } from '@nestjs/common';
+ import { InjectRepository } from '@nestjs/typeorm';
+ import { Repository } from 'typeorm';
++import * as bcrypt from 'bcrypt';
+ import { User } from './user.entity';
+ import { CreateUserDto } from './dto/create-user.dto';
+ 
+ @Injectable()
+ export class UsersService {
+@@ -10,18 +11,19 @@ export class UsersService {
+     @InjectRepository(User) private readonly repo: Repository<User>,
+   ) {}
+ 
+   async create(dto: CreateUserDto) {
+-    const user = this.repo.create(dto);
++    const passwordHash = await bcrypt.hash(dto.password, 10);
++    const user = this.repo.create({ ...dto, passwordHash });
+     return this.repo.save(user);
+   }
+ 
+   async findOne(id: number) {
+     const user = await this.repo.findOneBy({ id });
+     if (!user) throw new NotFoundException(`User ${id} not found`);
+     return user;
+   }
+ 
+-  async findAllLegacy() {
+-    return this.repo.query('SELECT * FROM users');
+-  }
++  findByEmail(email: string) {
++    return this.repo.findOneBy({ email });
++  }
+ }
+diff --git a/src/users/users.controller.ts b/src/users/users.controller.ts
+index 6e7f8a9..0b1c2d3 100644
+--- a/src/users/users.controller.ts
++++ b/src/users/users.controller.ts
+@@ -1,5 +1,6 @@
+-import { Controller, Get, Param } from '@nestjs/common';
++import { Controller, Get, Param, ParseIntPipe, UseGuards } from '@nestjs/common';
+ import { UsersService } from './users.service';
++import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+ 
+ @Controller('users')
+ export class UsersController {
+@@ -7,9 +8,10 @@ export class UsersController {
+   constructor(private readonly usersService: UsersService) {}
+ 
+   @Get(':id')
+-  findOne(@Param('id') id: string) {
+-    return this.usersService.findOne(+id);
++  @UseGuards(JwtAuthGuard)
++  findOne(@Param('id', ParseIntPipe) id: number) {
++    return this.usersService.findOne(id);
+   }
+ }
+diff --git a/src/users/users.module.ts b/src/users/users.module.ts
+index 7f8a9b0..1c2d3e4 100644
+--- a/src/users/users.module.ts
++++ b/src/users/users.module.ts
+@@ -6,7 +6,8 @@ import { UsersController } from './users.controller';
+ @Module({
+   imports: [TypeOrmModule.forFeature([User])],
+   providers: [UsersService],
+   controllers: [UsersController],
++  exports: [UsersService],
+ })
+ export class UsersModule {}
+diff --git a/src/orders/orders.service.ts b/src/orders/orders.service.ts
+index 8a9b0c1..2d3e4f5 100644
+--- a/src/orders/orders.service.ts
++++ b/src/orders/orders.service.ts
+@@ -18,9 +18,10 @@ export class OrdersService {
+ 
+   async createForUser(userId: number, dto: CreateOrderDto) {
+     const user = await this.usersService.findOne(userId);
+-    const order = this.repo.create({ ...dto, user });
++    const total = dto.items.reduce((sum, item) => sum + item.price * item.qty, 0);
++    const order = this.repo.create({ ...dto, user, total });
+     return this.repo.save(order);
+   }
+</script>
+
+<script>
+(() => {
+'use strict';
+const SOURCE = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const dirOf = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+const baseOf = p => p.slice(p.lastIndexOf('/') + 1);
+const normPath = p => { const o = []; for (const s of p.split('/')) { if (!s || s === '.') continue; if (s === '..') o.pop(); else o.push(s); } return o.join('/'); };
+const pascal = s => s.replace(/(^|[-_.\s]+)(\w)/g, (_, a, b) => b.toUpperCase());
+const indentOf = s => /^[ \t]*/.exec(s)[0].replace(/\t/g, '  ').length;
+
+/* ---------- Diff parsing ---------- */
+function parseHunks(text) {
+  const hunks = []; let h = null, o = 0, n = 0;
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/.exec(line);
+      if (m) { h = { header: line, ctx: m[3] || '', lines: [] }; o = +m[1]; n = +m[2]; hunks.push(h); }
+      continue;
+    }
+    if (!h || line.startsWith('\\')) continue;
+    const t = line[0];
+    if (t === '+') h.lines.push({ t: '+', text: line.slice(1), n: n++ });
+    else if (t === '-') h.lines.push({ t: '-', text: line.slice(1), o: o++, n });
+    else h.lines.push({ t: ' ', text: t === ' ' ? line.slice(1) : line, o: o++, n: n++ });
+  }
+  for (const hk of hunks) while (hk.lines.length && hk.lines[hk.lines.length - 1].t === ' ' && hk.lines[hk.lines.length - 1].text === '') hk.lines.pop();
+  return hunks;
+}
+function makeFile(path, oldPath, status, hunks, extra = {}) {
+  let additions = 0, deletions = 0;
+  for (const h of hunks) for (const l of h.lines) { if (l.t === '+') additions++; else if (l.t === '-') deletions++; }
+  return { path, oldPath, status, hunks, additions, deletions, ...extra };
+}
+function parseUnifiedDiff(text) {
+  const files = [];
+  for (const chunk of text.replace(/\r\n/g, '\n').split(/^(?=diff --git )/m)) {
+    if (!chunk.startsWith('diff --git ')) continue;
+    const lines = chunk.split('\n');
+    const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(lines[0]);
+    let oldPath = m ? m[1] : null, path = m ? m[2] : null, status = 'modified', binary = false, i = 1;
+    for (; i < lines.length && !lines[i].startsWith('@@'); i++) {
+      const l = lines[i];
+      if (l.startsWith('new file mode')) status = 'added';
+      else if (l.startsWith('deleted file mode')) status = 'removed';
+      else if (l.startsWith('rename from ')) { oldPath = l.slice(12); status = 'renamed'; }
+      else if (l.startsWith('rename to ')) path = l.slice(10);
+      else if (l.startsWith('--- ') && l !== '--- /dev/null') oldPath = l.slice(4).replace(/^a\//, '');
+      else if (l.startsWith('+++ ') && l !== '+++ /dev/null') path = l.slice(4).replace(/^b\//, '');
+      else if (l.startsWith('Binary files')) binary = true;
+    }
+    if (status === 'removed') path = oldPath;
+    if (!path) continue;
+    files.push(makeFile(path, oldPath, status, parseHunks(lines.slice(i).join('\n')), { noPatch: binary }));
+  }
+  return files;
+}
+const newTextOf = f => f.hunks.map(h => h.lines.filter(l => l.t !== '-').map(l => l.text).join('\n')).join('\n');
+const oldTextOf = f => f.hunks.map(h => h.lines.filter(l => l.t !== '+').map(l => l.text).join('\n')).join('\n');
+
+/* ---------- Symbol detection ---------- */
+const KW = new Set(['if','for','while','switch','catch','return','function','await','new','typeof','super','this','else','do','try','with','yield','throw','delete','void','import','export','const','let','var','case']);
+const MODS = '(?:(?:public|private|protected|static|async|readonly|override|abstract|declare)\\s+)*';
+const RE_CLASS = /^(\s*)(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
+const RE_FUNC = /^(\s*)(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/;
+const RE_ARROW = /^(\s*)(?:export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>/;
+const RE_METHOD = new RegExp('^(\\s+)' + MODS + '(?:get\\s+|set\\s+)?\\*?([A-Za-z_$][\\w$]*)\\s*(?:<[^>]*>)?\\s*\\(');
+const RE_PROP_FN = new RegExp('^(\\s+)' + MODS + '([A-Za-z_$][\\w$]*)\\s*(?::[^=]+)?=\\s*(?:async\\s+)?\\(');
+const RE_ROUTE = /@(Get|Post|Put|Patch|Delete|All|Options|Head)\(\s*(?:['"`]([^'"`]*)['"`])?/;
+const RE_CTRL = /@Controller\(\s*(?:['"`]([^'"`]*)['"`]|\{[^}]*path:\s*['"`]([^'"`]*)['"`])?/;
+
+function declMatch(text) {
+  let m;
+  if ((m = RE_CLASS.exec(text))) return { name: m[2], kind: 'class', indent: indentOf(text) };
+  if ((m = RE_FUNC.exec(text))) return { name: m[2], kind: 'function', indent: indentOf(text) };
+  if ((m = RE_ARROW.exec(text))) return { name: m[2], kind: 'function', indent: indentOf(text) };
+  const t = text.trimEnd(), ind = indentOf(text);
+  if (ind > 0 && ind <= 4 && (m = RE_METHOD.exec(text)) && !KW.has(m[2]) && (/[{(,]$/.test(t) || /\)\s*\{\s*\}$/.test(t)))
+    return { name: m[2], kind: m[2] === 'constructor' ? 'constructor' : 'method', indent: ind };
+  if (ind > 0 && ind <= 4 && (m = RE_PROP_FN.exec(text)) && !KW.has(m[2])) return { name: m[2], kind: 'method', indent: ind };
+  return null;
+}
+function findClose(L, i, ind) {
+  const t = L[i].trim();
+  const opens = (t.match(/\{/g) || []).length, closes = (t.match(/\}/g) || []).length;
+  if (opens && opens <= closes) return i;
+  for (let k = i + 1; k < L.length; k++) {
+    const s = L[k], st = s.trim();
+    if (!st) continue;
+    const ki = indentOf(s);
+    if (ki < ind) return k - 1;
+    if (ki === ind) {
+      if (st.startsWith('}')) return k;
+      if (/^[)\]]/.test(st) && /[};,]\s*$/.test(st)) return k;
+    }
+  }
+  return L.length - 1;
+}
+function extractSymbols(text) {
+  const L = text.split('\n'), syms = []; let prefix = null;
+  for (let i = 0; i < L.length; i++) {
+    const line = L[i]; let m;
+    if (prefix === null && (m = RE_CTRL.exec(line))) prefix = m[1] || m[2] || '';
+    if ((m = RE_CLASS.exec(line))) {
+      const ci = indentOf(line), end = findClose(L, i, ci);
+      let ds = i;
+      while (ds > 0) { const p = L[ds - 1], pt = p.trim(); if (!pt) break; if (indentOf(p) > ci || pt.startsWith('@') || /^[})\]]/.test(pt)) ds--; else break; }
+      const cls = { name: m[2], kind: 'class', start: ds + 1, decl: i + 1, end: end + 1, children: [] };
+      let mi = null;
+      for (let j = i + 1; j < end; j++) { const st = L[j].trim(); if (st && !st.startsWith('}')) { mi = indentOf(L[j]); break; } }
+      let decoStart = null;
+      for (let j = i + 1; mi !== null && j < end; j++) {
+        const s = L[j], t = s.trim();
+        if (!t || indentOf(s) !== mi) continue;
+        if (t.startsWith('@')) { if (decoStart === null) decoStart = j; continue; }
+        if (/^[})\]]/.test(t)) continue;
+        const mm = RE_METHOD.exec(s); let name = mm && !KW.has(mm[2]) ? mm[2] : null;
+        if (!name) { const pm = RE_PROP_FN.exec(s); if (pm && !KW.has(pm[2])) name = pm[2]; }
+        if (name) {
+          const st = decoStart ?? j;
+          const mEnd = /;\s*$/.test(t) ? j : findClose(L, j, mi);
+          const r = RE_ROUTE.exec(L.slice(st, j).join('\n'));
+          cls.children.push({ name, kind: name === 'constructor' ? 'constructor' : 'method', start: st + 1, decl: j + 1, end: mEnd + 1, parent: cls.name, route: r ? { verb: r[1].toUpperCase(), path: r[2] || '' } : null });
+          j = Math.max(j, mEnd);
+        }
+        decoStart = null;
+      }
+      syms.push(cls); i = end; continue;
+    }
+    if (indentOf(line) === 0 && (m = RE_FUNC.exec(line) || RE_ARROW.exec(line))) {
+      const end = /;\s*$/.test(line.trim()) ? i : findClose(L, i, 0);
+      syms.push({ name: m[2], kind: 'function', start: i + 1, decl: i + 1, end: end + 1, children: [] });
+      i = end;
+    }
+  }
+  return { syms, prefix: prefix || '' };
+}
+function lookup(model, n) {
+  for (const s of model.syms) {
+    if (n < s.start || n > s.end) continue;
+    for (const c of s.children) if (n >= c.start && n <= c.end) return { sym: c, cls: s };
+    return { sym: s, cls: s.kind === 'class' ? s : null };
+  }
+  return { sym: null, cls: null };
+}
+const FILE_SYM = { name: 'Imports and top of file', kind: 'file' };
+
+function analyzeFile(f, content) {
+  const recs = new Map();
+  let model = null, names = new Set(), prefix = '', primaryClass = null;
+  if (content != null) {
+    model = extractSymbols(content); prefix = model.prefix;
+    for (const s of model.syms) { names.add(s.name); s.children.forEach(c => names.add(c.name)); }
+  }
+  for (const h of f.hunks) for (const l of h.lines) {
+    let m;
+    if (!prefix && (m = RE_CTRL.exec(l.text))) prefix = m[1] || m[2] || '';
+    if (!primaryClass && (m = RE_CLASS.exec(l.text))) primaryClass = m[2];
+  }
+  if (!primaryClass) for (const h of f.hunks) { const m = RE_CLASS.exec(h.ctx); if (m) { primaryClass = m[2]; break; } }
+  const rec = t => {
+    const key = (t.parent || '') + '|' + t.name + '|' + t.kind;
+    if (!recs.has(key)) recs.set(key, { key, name: t.name, kind: t.kind, parent: t.parent || null, route: t.route || null, lines: [], adds: 0, dels: 0, declAdded: false, declRemoved: false });
+    return recs.get(key);
+  };
+  f.hunks.forEach((h, hi) => {
+    let cur = null, curClass = null, removedCur = null, lastRoute = null;
+    if (!model) {
+      const d = declMatch(h.ctx);
+      if (d) { if (d.kind === 'class') { curClass = d.name; cur = { name: d.name, kind: 'class' }; } else cur = { name: d.name, kind: d.kind, parent: d.indent > 0 ? primaryClass : null }; }
+    }
+    const owner = [];
+    if (!model) h.lines.forEach((l, k) => {
+      const cm = RE_CLASS.exec(l.text); if (!cm) return;
+      const ci = indentOf(l.text); let j = k;
+      while (j > 0) { const p = h.lines[j - 1].text, pt = p.trim(); if (!pt) break; if (indentOf(p) > ci || pt.startsWith('@') || /^[})\]]/.test(pt)) j--; else break; }
+      for (let x = j; x < k; x++) owner[x] = { name: cm[2], kind: 'class' };
+    });
+    h.lines.forEach((l, li) => {
+      const d = declMatch(l.text); let target;
+      if (model) {
+        if (l.t === '-' && d && !names.has(d.name)) {
+          const enc = lookup(model, l.n);
+          removedCur = { name: d.name, kind: d.kind, parent: d.kind === 'class' ? null : (enc.cls ? enc.cls.name : null) };
+        } else if (l.t !== '-') removedCur = null;
+        if (removedCur && l.t === '-') target = removedCur;
+        else target = lookup(model, l.n).sym || FILE_SYM;
+      } else {
+        if (d) {
+          if (d.kind === 'class') { curClass = d.name; cur = { name: d.name, kind: 'class' }; }
+          else cur = { name: d.name, kind: d.kind, parent: d.indent > 0 ? (curClass || primaryClass) : null, route: lastRoute };
+          lastRoute = null;
+        } else { const r = RE_ROUTE.exec(l.text); if (r) lastRoute = { verb: r[1].toUpperCase(), path: r[2] || '' }; }
+        target = owner[li] || cur || FILE_SYM;
+      }
+      const r = rec(target);
+      r.lines.push({ ...l, hunk: hi });
+      if (l.t === '+') { r.adds++; if (d && d.name === target.name) r.declAdded = true; }
+      if (l.t === '-') { r.dels++; if (d && d.name === target.name) r.declRemoved = true; }
+    });
+  });
+  const syms = [...recs.values()].filter(r => r.adds + r.dels > 0).map(r => ({
+    ...r,
+    status: f.status === 'added' ? 'added' : f.status === 'removed' ? 'removed' : r.declAdded && !r.declRemoved ? 'added' : r.declRemoved && !r.declAdded ? 'removed' : 'modified',
+    fullRoute: r.route ? '/' + [prefix, r.route.path].filter(Boolean).join('/').replace(/\/+/g, '/').replace(/^\/|\/$/g, '') : null
+  }));
+  return { syms, primaryClass };
+}
+
+/* ---------- Imports & module metadata ---------- */
+function parseImports(text) {
+  const out = new Map(); if (!text) return out;
+  const re = /^[ \t]*import\s+(?:type\s+)?([^;]*?)\s*from\s+['"]([^'"]+)['"]/gm; let m;
+  while ((m = re.exec(text))) {
+    const clause = m[1], names = [];
+    const b = /\{([^}]*)\}/.exec(clause);
+    if (b) b[1].split(',').forEach(s => { s = s.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]; if (s) names.push(s); });
+    const def = /^([\w$]+)/.exec(clause.trim()); if (def && def[1] !== 'type') names.unshift(def[1]);
+    const ns = /\*\s+as\s+([\w$]+)/.exec(clause); if (ns) names.push(ns[1]);
+    out.set(m[2], names);
+  }
+  return out;
+}
+function arrayAfter(text, key) {
+  const m = new RegExp('\\b' + key + '\\s*:\\s*\\[').exec(text); if (!m) return null;
+  let i = m.index + m[0].length, depth = 1; const start = i;
+  for (; i < text.length; i++) { const c = text[i]; if (c === '[') depth++; else if (c === ']' && !--depth) return text.slice(start, i); }
+  return text.slice(start);
+}
+function parseModuleDecl(text) {
+  if (!text) return null;
+  const at = text.indexOf('@Module('); if (at < 0) return null;
+  let body = text.slice(at);
+  const cm = /(?:export\s+)?class\s+([\w$]+)/.exec(body);
+  if (cm) body = body.slice(0, cm.index);
+  const idents = s => s == null ? null : [...new Set([...s.matchAll(/\b([A-Z][\w$]*)\b/g)].map(x => x[1]))];
+  const imp = arrayAfter(body, 'imports');
+  return {
+    className: cm ? cm[1] : null,
+    imports: imp == null ? null : new Set([...imp.matchAll(/\b([A-Z][\w$]*Module)\b/g)].map(x => x[1])),
+    providers: idents(arrayAfter(body, 'providers')),
+    controllers: idents(arrayAfter(body, 'controllers')),
+    exports: idents(arrayAfter(body, 'exports'))
+  };
+}
+const moduleIdents = (f, types) => {
+  const s = new Set();
+  for (const h of f.hunks) for (const l of h.lines) if (types.includes(l.t)) for (const m of l.text.matchAll(/\b([A-Z][\w$]*Module)\b/g)) s.add(m[1]);
+  return s;
+};
+
+/* ---------- Model ---------- */
+function buildModel({ files, contents, tree, meta }) {
+  const allPaths = new Set([...(tree || []), ...files.map(f => f.path), ...files.map(f => f.oldPath).filter(Boolean)]);
+  const moduleDirs = new Map();
+  for (const p of allPaths) if (/\.module\.ts$/.test(p) && !p.includes('node_modules')) moduleDirs.set(dirOf(p), p);
+  const resolveSpec = (from, spec) => {
+    let p;
+    if (spec.startsWith('.')) p = normPath(dirOf(from) + '/' + spec);
+    else if (/^(src|apps|libs)\//.test(spec)) p = spec;
+    else return null;
+    if (/\.[jt]s$/.test(p)) return p;
+    if (allPaths.has(p + '.ts')) return p + '.ts';
+    if (allPaths.has(p + '/index.ts')) return p + '/index.ts';
+    return p + '.ts';
+  };
+  const infos = new Map();
+  for (const f of files) {
+    const content = contents.get(f.path) ?? null;
+    const diffNew = newTextOf(f), diffOld = oldTextOf(f);
+    const fullText = f.status === 'removed' ? '' : (content ?? diffNew);
+    const full = parseImports(fullText), dn = parseImports(diffNew), dold = parseImports(diffOld);
+    const imports = [];
+    for (const [spec, nm] of full) {
+      const changed = dn.has(spec) !== dold.has(spec) || (dn.has(spec) && dold.has(spec) && dn.get(spec).join() !== dold.get(spec).join());
+      imports.push({ spec, names: nm, changed: f.status === 'added' || changed, removed: false });
+    }
+    for (const [spec, nm] of dold) if (!full.has(spec)) imports.push({ spec, names: nm, changed: true, removed: true });
+    for (const im of imports) im.resolved = resolveSpec(f.path, im.spec);
+    infos.set(f.path, { f, content, diffNew, diffOld, fullText, imports });
+    for (const im of imports) if (im.resolved && /\.module\.ts$/.test(im.resolved) && !moduleDirs.has(dirOf(im.resolved))) moduleDirs.set(dirOf(im.resolved), im.resolved);
+  }
+  const moduleOf = path => {
+    let d = dirOf(path);
+    for (;;) {
+      if (moduleDirs.has(d)) {
+        const mf = moduleDirs.get(d);
+        if (baseOf(mf) === 'app.module.ts' && dirOf(path) !== d) {
+          const rest = dirOf(path).slice(d ? d.length + 1 : 0); const id = (d ? d + '/' : '') + rest.split('/')[0];
+          if (!moduleDirs.has(id)) return id;
+        }
+        return d;
+      }
+      if (!d) break; d = dirOf(d);
+    }
+    if (!/\.[jt]s$/.test(path)) return '(project)';
+    const segs = dirOf(path).split('/');
+    return segs[0] === 'src' && segs[1] ? 'src/' + segs[1] : (dirOf(path) || '(project)');
+  };
+  const nodes = new Map();
+  const node = id => {
+    if (!nodes.has(id)) {
+      const mf = moduleDirs.get(id) || null;
+      nodes.set(id, { id, moduleFile: mf, implicit: !mf, name: mf ? pascal(baseOf(mf).replace(/\.module\.ts$/, '')) + 'Module' : id === '(project)' ? 'Project files' : baseOf(id) + ' (folder)', files: [], adds: 0, dels: 0, out: new Map(), inn: new Set(), decl: null });
+    }
+    return nodes.get(id);
+  };
+  for (const d of moduleDirs.keys()) node(d);
+  const classMap = new Map();
+  for (const [dir, mf] of moduleDirs) {
+    const n = node(dir), info = infos.get(mf);
+    const text = info ? info.fullText : contents.get(mf) ?? null;
+    n.decl = parseModuleDecl(text);
+    if (n.decl && n.decl.className) { n.name = n.decl.className; classMap.set(n.decl.className, dir); }
+  }
+  for (const info of infos.values()) for (const im of info.imports)
+    if (im.resolved && /\.module\.ts$/.test(im.resolved)) for (const nm of im.names) if (/Module$/.test(nm) && !classMap.has(nm)) classMap.set(nm, dirOf(im.resolved));
+  for (const n of nodes.values()) if (n.moduleFile && !n.decl?.className) classMap.has(n.name) || classMap.set(n.name, n.id);
+
+  const edges = new Map();
+  const addEdge = (from, to, kind, label, changed, removed) => {
+    if (!from || !to || from === to) return;
+    node(from); node(to);
+    const k = from + '>' + to;
+    let e = edges.get(k);
+    if (!e) { e = { from, to, kinds: new Set(), labels: new Set(), changed: false, removed: true }; edges.set(k, e); }
+    e.kinds.add(kind); if (label) e.labels.add(label);
+    e.changed = e.changed || changed; e.removed = e.removed && removed;
+  };
+  for (const [dir, mf] of moduleDirs) {
+    const n = node(dir), info = infos.get(mf);
+    let current = n.decl && n.decl.imports;
+    let plus = new Set(), minus = new Set(), dn = null, dold = null;
+    if (info) {
+      plus = moduleIdents(info.f, ['+']); minus = moduleIdents(info.f, ['-']);
+      dn = parseModuleDecl(info.diffNew)?.imports || null; dold = parseModuleDecl(info.diffOld)?.imports || null;
+      if (!current) current = moduleIdents(info.f, [' ', '+']);
+    }
+    if (!current) continue;
+    for (const id of current) {
+      const t = classMap.get(id); if (!t) continue;
+      addEdge(dir, t, 'module', id, info?.f.status === 'added' || plus.has(id) || (dn && dold && dn.has(id) !== dold.has(id)) || false, false);
+    }
+    for (const id of new Set([...(dold || []), ...minus])) {
+      if (current.has(id)) continue; const t = classMap.get(id); if (t) addEdge(dir, t, 'module', id, true, true);
+    }
+  }
+  const fileModels = new Map();
+  for (const info of infos.values()) {
+    const f = info.f, mid = moduleOf(f.path), n = node(mid);
+    const a = analyzeFile(f, f.status === 'removed' ? null : info.content);
+    const fm = { ...f, syms: a.syms, cls: a.primaryClass, module: mid };
+    fileModels.set(f.path, fm);
+    n.files.push(fm); n.adds += f.additions; n.dels += f.deletions;
+    for (const im of info.imports) if (im.resolved) addEdge(mid, moduleOf(im.resolved), 'import', im.names.join(', '), im.changed, im.removed);
+  }
+  for (const e of edges.values()) { nodes.get(e.from).out.set(e.to, e); nodes.get(e.to).inn.add(e.from); }
+  for (const n of nodes.values()) {
+    n.changed = n.files.length > 0;
+    n.state = !n.changed ? 'none' : n.files.every(f => f.status === 'added') ? 'added' : n.files.every(f => f.status === 'removed') ? 'removed' : 'modified';
+  }
+  for (const n of nodes.values()) n.affected = !n.changed && [...n.out.keys()].some(t => nodes.get(t).changed);
+
+  const corpus = [];
+  for (const info of infos.values()) {
+    if (info.f.status === 'removed') continue;
+    const lines = info.content != null
+      ? info.content.split('\n').map((text, i) => ({ n: i + 1, text }))
+      : info.f.hunks.flatMap(h => h.lines.filter(l => l.t !== '-').map(l => ({ n: l.n, text: l.text })));
+    corpus.push({ path: info.f.path, lines });
+  }
+  for (const [p, c] of contents) if (!infos.has(p)) corpus.push({ path: p, lines: c.split('\n').map((text, i) => ({ n: i + 1, text })) });
+
+  return { nodes, edges, files: [...fileModels.values()], meta, corpus, moduleOf, fullContents: contents.size > 0 };
+}
+
+function findRefs(M, sym, file) {
+  if (sym.kind === 'file' || sym.status === 'removed') return [];
+  const nm = sym.name.replace(/[$]/g, '\\$');
+  let re;
+  if (sym.kind === 'method') re = new RegExp('\\.' + nm + '\\s*\\(');
+  else if (sym.kind === 'function') re = new RegExp('(^|[^.\\w$])' + nm + '\\s*\\(');
+  else if (sym.kind === 'class') re = new RegExp('\\b' + nm + '\\b');
+  else return [];
+  const out = [];
+  for (const c of M.corpus) {
+    for (const l of c.lines) {
+      if (!re.test(l.text)) continue;
+      if (/^\s*import\b/.test(l.text) || /^\s*\}?\s*from\s/.test(l.text)) continue;
+      const d = declMatch(l.text); if (d && d.name === sym.name) continue;
+      if (c.path === file.path && sym.kind === 'class') continue;
+      out.push({ path: c.path, n: l.n, text: l.text.trim() });
+      if (out.length >= 12) return out;
+    }
+  }
+  return out;
+}
+
+/* ---------- State ---------- */
+let M = null, selected = null, showAll = false, token = '';
+try { token = localStorage.getItem('nestprmap.token') || ''; if (token) { $('#token').value = token; $('#remember').checked = true; } } catch (e) {}
+$('#token').addEventListener('input', e => { token = e.target.value.trim(); saveToken(); });
+$('#remember').addEventListener('change', saveToken);
+function saveToken() { try { if ($('#remember').checked && token) localStorage.setItem('nestprmap.token', token); else localStorage.removeItem('nestprmap.token'); } catch (e) {} }
+
+const setStatus = (msg, err) => { const s = $('#status'); s.textContent = msg || ''; s.classList.toggle('error', !!err); };
+
+/* ---------- Graph render ---------- */
+const W = 232, H = 78, CG = 92, RG = 22, PAD = 28;
+function visibleIds() {
+  const ids = new Set();
+  for (const n of M.nodes.values()) if (n.changed) ids.add(n.id);
+  if (showAll) for (const n of M.nodes.values()) ids.add(n.id);
+  else for (const id of [...ids]) { const n = M.nodes.get(id); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
+  return [...ids];
+}
+function layout(ids) {
+  const set = new Set(ids), h = new Map();
+  const outs = id => [...M.nodes.get(id).out.keys()].filter(t => set.has(t));
+  const visit = (id, stack) => {
+    if (h.has(id)) return h.get(id); if (stack.has(id)) return 0;
+    stack.add(id); let d = 0; for (const t of outs(id)) d = Math.max(d, visit(t, stack) + 1); stack.delete(id);
+    h.set(id, d); return d;
+  };
+  ids.forEach(id => visit(id, new Set()));
+  const maxH = Math.max(0, ...h.values());
+  const cols = []; for (const id of ids) { const c = maxH - h.get(id); (cols[c] = cols[c] || []).push(id); }
+  const row = new Map(), pos = new Map();
+  cols.forEach((col, ci) => {
+    const score = id => { const ps = [...M.nodes.get(id).inn].filter(p => row.has(p)); return ps.length ? ps.reduce((a, p) => a + row.get(p), 0) / ps.length : 1e3; };
+    col.sort((a, b) => score(a) - score(b) || (M.nodes.get(b).changed - M.nodes.get(a).changed) || M.nodes.get(a).name.localeCompare(M.nodes.get(b).name));
+    col.forEach((id, ri) => row.set(id, ri));
+  });
+  const maxRows = Math.max(1, ...cols.map(c => c ? c.length : 0));
+  const fullH = maxRows * (H + RG) - RG;
+  cols.forEach((col, ci) => {
+    if (!col) return;
+    const off = (fullH - (col.length * (H + RG) - RG)) / 2;
+    col.forEach((id, ri) => pos.set(id, { x: PAD + ci * (W + CG), y: PAD + off + ri * (H + RG) }));
+  });
+  const col = new Map(); cols.forEach((c, ci) => c && c.forEach(id => col.set(id, ci)));
+  const bottom = cols.map(c => c ? Math.max(...c.map(id => pos.get(id).y + H)) : PAD);
+  return { pos, col, bottom, width: PAD * 2 + cols.length * (W + CG) - CG, height: PAD * 2 + fullH + 30 };
+}
+const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+function renderGraph() {
+  const cv = $('#canvas');
+  if (!M) { cv.innerHTML = ''; return; }
+  const ids = visibleIds();
+  if (!ids.length) { cv.innerHTML = '<p class="note" style="padding:20px">No files in this diff.</p>'; return; }
+  const { pos, col, bottom, width } = layout(ids);
+  let height = layout(ids).height;
+  const set = new Set(ids);
+  const nb = selected ? new Set([selected, ...M.nodes.get(selected).out.keys(), ...M.nodes.get(selected).inn]) : null;
+  const vis = [...M.edges.values()].filter(e => set.has(e.from) && set.has(e.to));
+  const op = new Map(), ip = new Map();
+  const spread = (list, map) => { const k = list.length; list.forEach((e, i) => map.set(e, k < 2 ? 0 : (i - (k - 1) / 2) * Math.min(12, 44 / (k - 1)))); };
+  for (const id of ids) {
+    spread(vis.filter(e => e.from === id).sort((a, b) => pos.get(a.to).y - pos.get(b.to).y), op);
+    spread(vis.filter(e => e.to === id).sort((a, b) => pos.get(a.from).y - pos.get(b.from).y), ip);
+  }
+  let eh = '', lanes = 0;
+  for (const e of vis) {
+    const a = pos.get(e.from), b = pos.get(e.to), ca = col.get(e.from), cb = col.get(e.to);
+    let d;
+    const x1 = a.x + W, y1 = a.y + H / 2 + op.get(e), x2 = b.x - 6, y2 = b.y + H / 2 + ip.get(e);
+    if (cb === ca + 1) { const dx = (x2 - x1) / 2; d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`; }
+    else if (cb > ca + 1) {
+      const ly = Math.max(...bottom.slice(ca + 1, cb)) + 22 + 12 * lanes++;
+      height = Math.max(height, ly + PAD);
+      const gs = x1 + CG / 2, ge = b.x - CG / 2, k = CG * 0.42;
+      d = `M${x1},${y1} C${x1 + k},${y1} ${gs - 4},${ly} ${gs + 14},${ly} L${ge - 14},${ly} C${ge + 4},${ly} ${x2 - k},${y2} ${x2},${y2}`;
+    } else { const bx1 = a.x + W / 2, by1 = a.y + H, bx2 = b.x + W / 2 + 10, by2 = b.y + H + 6, lo = Math.max(by1, by2) + 40; height = Math.max(height, lo + PAD); d = `M${bx1},${by1} C${bx1},${lo} ${bx2},${lo} ${bx2},${by2}`; }
+    const cls = ['edge', e.removed ? 'rem' : e.changed ? 'chg' : '', !e.kinds.has('module') ? 'imp' : '', nb && !(e.from === selected || e.to === selected) ? 'dim' : ''].join(' ');
+    const mk = e.removed ? 'mr' : e.changed ? 'mc' : 'mn';
+    const title = `${M.nodes.get(e.from).name} → ${M.nodes.get(e.to).name}\n${e.kinds.has('module') ? 'Module import' : 'File import only'}${e.removed ? ' (removed in this PR)' : e.changed ? ' (changed in this PR)' : ''}\n${[...e.labels].join(', ')}`;
+    eh += `<path class="${cls}" d="${d}" marker-end="url(#${mk})"><title>${esc(title)}</title></path>`;
+  }
+  let nh = '';
+  for (const id of ids) {
+    const n = M.nodes.get(id), p = pos.get(id);
+    const cls = ['node', 's-' + n.state, n.affected ? 'affected' : '', !n.changed && !n.affected ? 'context' : '', id === selected ? 'sel' : '', nb && !nb.has(id) ? 'dim' : ''].join(' ');
+    const meta = n.changed
+      ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${n.files.length} file${n.files.length === 1 ? '' : 's'}`
+      : n.affected ? 'Imports changed code' : 'Unchanged';
+    nh += `<g class="${cls}" data-id="${esc(id)}" tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
+      <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
+      <text class="nm" x="18" y="25">${esc(clip(n.name, 25))}</text>
+      <text class="pth" x="18" y="44">${esc(clip(n.id, 29))}</text>
+      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.name + '\n' + n.id)}</title></g>`;
+  }
+  const vw = Math.max(width, 300);
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" style="width:100%;max-width:${vw}px;min-width:${Math.round(vw * 0.62)}px" role="img" aria-label="Modules touched by this pull request">
+    <defs>${['mn', 'mc', 'mr'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
+    ${eh}${nh}</svg>`;
+}
+$('#canvas').addEventListener('click', e => { const g = e.target.closest('.node'); if (g) select(g.dataset.id); else if (selected) select(null); });
+$('#canvas').addEventListener('keydown', e => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); select(g.dataset.id); } });
+$('#showAll').addEventListener('change', e => { showAll = e.target.checked; renderGraph(); });
+
+/* ---------- Panel ---------- */
+const TOK = /(\/\/.*$)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)|(@[A-Za-z_]\w*)|\b(import|export|from|class|const|let|var|return|async|await|private|public|protected|readonly|constructor|new|if|else|throw|this|function|extends|implements|interface|type|static|for|of|in|true|false|null|undefined)\b/g;
+function hl(text) {
+  let out = '', last = 0, m; TOK.lastIndex = 0;
+  while ((m = TOK.exec(text))) {
+    out += esc(text.slice(last, m.index));
+    const c = m[1] ? 'tk-c' : m[2] ? 'tk-s' : m[3] ? 'tk-d' : 'tk-k';
+    out += `<span class="${c}">${esc(m[0])}</span>`; last = TOK.lastIndex;
+    if (m[0] === '') TOK.lastIndex++;
+  }
+  return out + esc(text.slice(last));
+}
+function diffBlock(lines) {
+  if (!lines.length) return '';
+  let html = '<div class="diff">', prev = null;
+  for (const l of lines) {
+    if (prev && (l.hunk !== prev.hunk)) html += '<div class="dl gap"><span class="ln"></span><span class="ln"></span><span></span><span>⋯</span></div>';
+    const cls = l.t === '+' ? 'add' : l.t === '-' ? 'del' : '';
+    html += `<div class="dl ${cls}"><span class="ln">${l.t === '+' ? '' : l.o ?? ''}</span><span class="ln">${l.t === '-' ? '' : l.n ?? ''}</span><span class="sg">${l.t === ' ' ? '' : l.t === '-' ? '−' : '+'}</span><span>${hl(l.text) || ' '}</span></div>`;
+    prev = l;
+  }
+  return html + '</div>';
+}
+const statusWord = s => ({ added: 'new', removed: 'removed', modified: 'changed', renamed: 'renamed' }[s] || s);
+const symTitle = s => s.kind === 'file' ? s.name : s.kind === 'constructor' ? `${s.parent || ''} constructor` : s.parent && s.kind !== 'class' ? `${s.parent}.${s.name}` : s.name;
+const kindWord = s => ({ method: 'method', function: 'function', class: 'class', constructor: 'injection', file: '' }[s.kind] || s.kind);
+const fileLabel = p => `${esc(baseOf(p))} <span>${esc(dirOf(p))}</span>`;
+
+function renderSummary() {
+  const m = M.meta, ns = [...M.nodes.values()];
+  const changed = ns.filter(n => n.changed).sort((a, b) => (b.adds + b.dels) - (a.adds + a.dels));
+  const affected = ns.filter(n => n.affected);
+  const adds = M.files.reduce((a, f) => a + f.additions, 0), dels = M.files.reduce((a, f) => a + f.deletions, 0);
+  const routes = M.files.flatMap(f => f.syms.filter(s => s.fullRoute).map(s => s));
+  const li = n => `<li><button data-mod="${esc(n.id)}"><span class="sw" style="background:${n.changed ? `var(--${n.state === 'added' ? 'add' : n.state === 'removed' ? 'del' : 'mod'})` : 'var(--accent)'}"></span><span class="nm">${esc(n.name)}</span>${n.changed ? `<span class="n-a">+${n.adds}</span><span class="n-d">−${n.dels}</span>` : ''}</button></li>`;
+  $('#pin').innerHTML = `
+    <h2>${esc(m.title)}</h2>
+    <p class="path">${m.repo ? esc(m.repo) + (m.number ? ' #' + m.number : '') : 'Pasted diff'}${m.author ? ' by ' + esc(m.author) : ''}</p>
+    ${m.url ? `<p><a href="${esc(m.url)}" target="_blank" rel="noopener">Open on GitHub</a></p>` : ''}
+    ${m.example ? '<p class="lead">This is an example PR that adds JWT login to a small NestJS app. Paste your own PR link above to map it.</p>' : ''}
+    <div class="stats"><div><b>${changed.length}</b><span>modules changed</span></div>${affected.length ? `<div><b>${affected.length}</b><span>use changed code</span></div>` : ''}<div><b>${M.files.length}</b><span>files</span></div><div><b><span class="n-a">+${adds}</span> <span class="n-d">−${dels}</span></b><span>lines</span></div></div>
+    <h3>Changed</h3><ul class="mlist">${changed.map(li).join('')}</ul>
+    ${affected.length ? `<h3>Not changed, but import something that did</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
+    ${routes.length ? `<h3>HTTP routes touched</h3><div class="chips">${routes.map(s => `<button class="chip" data-mod="${esc(M.files.find(f => f.syms.includes(s)).module)}"><span class="route">${esc(s.route.verb)}</span> ${esc(s.fullRoute || '/')}</button>`).join('')}</div>` : ''}
+    <p class="foot">Select a module in the map to see what changed inside it. Modules come from <code>*.module.ts</code> files and their <code>@Module</code> imports; solid arrows are module imports, dotted ones are file imports only. ${M.fullContents ? '' : 'Only the diff was available, so symbols outside the changed lines are inferred from nearby code.'} Dynamic modules and string injection tokens aren’t traced.</p>`;
+}
+function renderModule(id) {
+  const n = M.nodes.get(id);
+  const outs = [...n.out.values()], ins = [...n.inn].map(f => M.nodes.get(f).out.get(id));
+  const chip = (e, other) => `<button class="chip ${e.removed ? 'rem' : e.changed ? 'chg' : ''}" data-mod="${esc(other)}" title="${e.removed ? 'Removed in this PR' : e.changed ? 'Added or changed in this PR' : ''}">${esc(M.nodes.get(other).name)}</button>`;
+  let why;
+  if (n.changed) why = `${n.files.length} file${n.files.length === 1 ? '' : 's'} ${n.state === 'added' ? 'added' : n.state === 'removed' ? 'removed' : 'changed'} in this PR.`;
+  else if (n.affected) why = `Not changed in this PR, but it imports ${[...n.out.keys()].filter(t => M.nodes.get(t).changed).map(t => M.nodes.get(t).name).join(', ')}, which did. Worth a look when reviewing.`;
+  else why = 'Not changed in this PR. Shown because a changed module is connected to it.';
+  const d = n.decl;
+  const declHtml = d ? ['providers', 'controllers', 'exports'].filter(k => d[k] && d[k].length).map(k => `<p class="decl">${k[0].toUpperCase() + k.slice(1)}: ${d[k].map(x => `<code>${esc(x)}</code>`).join(', ')}</p>`).join('') : '';
+  const totalSyms = n.files.reduce((a, f) => a + f.syms.length, 0);
+  const files = n.files.slice().sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions)).map(f => {
+    const syms = f.syms.map(s => {
+      const refs = findRefs(M, s, f);
+      return `<details class="sym"${totalSyms <= 5 ? ' open' : ''}><summary><span class="sname">${esc(symTitle(s))}</span>${s.fullRoute ? `<span class="route">${esc(s.route.verb)} ${esc(s.fullRoute)}</span>` : ''}<span class="kind">${esc([kindWord(s), statusWord(s.status)].filter(Boolean).join(', '))}</span><span class="grow"></span><span class="cnt"><span class="n-a">+${s.adds}</span> <span class="n-d">−${s.dels}</span></span></summary>
+        <div class="sbody">${diffBlock(s.lines)}${refs.length ? `<div class="refs"><h4>${s.kind === 'class' ? 'Used in' : 'Called from'} (${refs.length}${refs.length >= 12 ? '+' : ''}, by name)</h4>${refs.map(r => `<button data-mod="${esc(M.moduleOf(r.path))}"><span class="rf">${esc(baseOf(r.path))} line ${r.n}</span><code>${esc(r.text)}</code></button>`).join('')}</div>` : ''}</div></details>`;
+    }).join('');
+    const all = f.hunks.flatMap((h, hi) => h.lines.map(l => ({ ...l, hunk: hi })));
+    return `<section class="file"><div class="fhead"><span class="badge b-${f.status}">${statusWord(f.status)}</span><span class="fname">${fileLabel(f.path)}</span><span class="n-a">+${f.additions}</span><span class="n-d">−${f.deletions}</span></div>
+      ${f.oldPath && f.oldPath !== f.path ? `<p class="note" style="padding:6px 12px 0;margin:0">Renamed from ${esc(f.oldPath)}</p>` : ''}
+      ${f.noPatch ? '<p class="note" style="padding:10px 12px;margin:0">GitHub didn’t include a diff for this file (binary or too large).</p>' : syms}
+      ${all.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(all)}</div></details>` : ''}</section>`;
+  }).join('');
+  $('#pin').innerHTML = `
+    <button class="btn quiet back" data-action="summary">← All modules</button>
+    <h2>${esc(n.name)}</h2><p class="path">${esc(n.moduleFile || n.id)}</p>
+    <p class="lead">${esc(why)}</p>${declHtml}
+    ${outs.length ? `<h3>Imports</h3><div class="chips">${outs.map(e => chip(e, e.to)).join('')}</div>` : ''}
+    ${ins.length ? `<h3>Imported by</h3><div class="chips">${ins.map(e => chip(e, e.from)).join('')}</div>` : ''}
+    ${n.files.length ? `<h3>What changed</h3>${files}` : ''}`;
+  $('#panel').scrollTop = 0;
+}
+function select(id) {
+  selected = id && M.nodes.has(id) ? id : null;
+  if (selected && !visibleIds().includes(selected)) { showAll = true; $('#showAll').checked = true; }
+  renderGraph();
+  selected ? renderModule(selected) : renderSummary();
+  if (selected && window.matchMedia('(max-width: 900px)').matches) $('#panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+$('#pin').addEventListener('click', e => {
+  const b = e.target.closest('[data-mod],[data-action]'); if (!b) return;
+  if (b.dataset.action === 'summary') select(null); else select(b.dataset.mod);
+});
+
+function show(model) {
+  M = model; selected = null; showAll = false; $('#showAll').checked = false;
+  const hidden = [...M.nodes.values()].length > visibleIds().length;
+  $('#allWrap').hidden = !hidden;
+  const m = M.meta;
+  $('#prTitle').innerHTML = `${esc(m.title)}${m.number ? `<small>#${m.number}</small>` : ''}`;
+  renderGraph(); renderSummary();
+}
+
+/* ---------- Sources ---------- */
+function openSheet(mode, ctx) {
+  const s = $('#sheet'); s.hidden = false;
+  const link = $('#diffLink'), steps = $('#sheetSteps');
+  $('#dlBtn').hidden = mode !== 'blocked';
+  if (mode === 'blocked') {
+    $('#sheetTitle').textContent = 'GitHub can’t be reached from inside Claude';
+    $('#sheetMsg').innerHTML = 'Pages published in Claude can’t make requests to other sites, so the PR has to come in as text here. Downloaded and opened from your computer, this same tool fetches PRs directly from a link.';
+    steps.hidden = false;
+    steps.innerHTML = '<li>Open the diff on GitHub with the button below.</li><li>Select all of it and copy.</li><li>Paste it here and map it.</li>';
+    link.hidden = false; link.href = `https://github.com/${ctx.owner}/${ctx.repo}/pull/${ctx.num}.diff`;
+  } else {
+    $('#sheetTitle').textContent = 'Paste the PR’s diff';
+    $('#sheetMsg').innerHTML = 'Paste the output of <code>git diff main...your-branch</code>, or the .diff version of a GitHub pull request (add <code>.diff</code> to the end of the PR link).';
+    steps.hidden = true; link.hidden = !ctx;
+    if (ctx) link.href = `https://github.com/${ctx.owner}/${ctx.repo}/pull/${ctx.num}.diff`;
+  }
+  $('#diffInput').focus();
+}
+let pendingCtx = null;
+$('#sheetClose').addEventListener('click', () => { $('#sheet').hidden = true; });
+$('#pasteBtn').addEventListener('click', () => openSheet('paste', pendingCtx));
+$('#exampleBtn').addEventListener('click', loadExample);
+$('#diffGo').addEventListener('click', () => {
+  const text = $('#diffInput').value;
+  const files = parseUnifiedDiff(text);
+  if (!files.length) { setStatus('That doesn’t look like a git diff. It should contain lines starting with “diff --git”.', true); return; }
+  $('#sheet').hidden = true; setStatus('');
+  show(buildModel({ files, contents: new Map(), tree: null, meta: pendingCtx ? { title: `${pendingCtx.owner}/${pendingCtx.repo} pull request`, repo: `${pendingCtx.owner}/${pendingCtx.repo}`, number: pendingCtx.num, url: `https://github.com/${pendingCtx.owner}/${pendingCtx.repo}/pull/${pendingCtx.num}` } : { title: 'Pasted diff' } }));
+});
+$('#dlBtn').addEventListener('click', async () => {
+  try {
+    if (window.claude && window.claude.use) {
+      const dl = await window.claude.use('downloads');
+      if (dl) { await dl.save({ filename: 'nest-pr-map.html', data: SOURCE }); return; }
+    }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([SOURCE], { type: 'text/html' })); a.download = 'nest-pr-map.html'; a.click();
+  } catch (e) { if (e && e.code !== 'declined') setStatus('The download couldn’t start here.', true); }
+});
+
+async function gh(path, raw) {
+  const headers = { Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json' };
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const r = await fetch('https://api.github.com' + path, { headers });
+  if (!r.ok) { const e = new Error('GitHub ' + r.status); e.status = r.status; e.remaining = r.headers.get('x-ratelimit-remaining'); e.reset = r.headers.get('x-ratelimit-reset'); throw e; }
+  return raw ? r.text() : r.json();
+}
+const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+async function fetchContent(full, sha, p) {
+  if (token) return gh(`/repos/${full}/contents/${encPath(p)}?ref=${sha}`, true);
+  const r = await fetch(`https://raw.githubusercontent.com/${full}/${sha}/${encPath(p)}`);
+  if (!r.ok) throw new Error('raw ' + r.status); return r.text();
+}
+async function pool(items, n, fn) {
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; try { await fn(items[k]); } catch (e) {} } }));
+}
+async function loadPR(url) {
+  const m = /github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+)/.exec(url);
+  if (!m) { setStatus('Use a pull request link like https://github.com/owner/repo/pull/123.', true); return; }
+  const [, owner, repo, num] = m; const base = `/repos/${owner}/${repo}`;
+  pendingCtx = { owner, repo, num };
+  setStatus('Loading pull request…');
+  let pr;
+  try { pr = await gh(`${base}/pulls/${num}`); }
+  catch (e) {
+    if (!e.status) { setStatus(''); openSheet('blocked', pendingCtx); return; }
+    if (e.status === 404) setStatus('That pull request wasn’t found. If the repository is private, add a GitHub token.', true);
+    else if (e.status === 401) setStatus('GitHub rejected the token. Check it under “GitHub token”.', true);
+    else if (e.status === 403 && e.remaining === '0') setStatus(`GitHub’s hourly limit is used up${e.reset ? ' until ' + new Date(e.reset * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}. Add a token to keep going.`, true);
+    else setStatus('GitHub returned an error (' + e.status + ').', true);
+    return;
+  }
+  try {
+    setStatus('Reading the changed files…');
+    let raw = [];
+    for (let page = 1; page <= 30; page++) { const batch = await gh(`${base}/pulls/${num}/files?per_page=100&page=${page}`); raw = raw.concat(batch); if (batch.length < 100) break; }
+    const files = raw.map(x => makeFile(x.filename, x.previous_filename || x.filename, x.status === 'removed' ? 'removed' : x.status === 'added' ? 'added' : x.status === 'renamed' ? 'renamed' : 'modified', x.patch ? parseHunks(x.patch) : [], { noPatch: !x.patch }));
+    const full = (pr.head && pr.head.repo && pr.head.repo.full_name) || `${owner}/${repo}`, sha = pr.head.sha;
+    let tree = null;
+    try { const t = await gh(`/repos/${full}/git/trees/${sha}?recursive=1`); tree = t.tree.filter(x => x.type === 'blob').map(x => x.path); } catch (e) {}
+    const want = new Set(files.filter(f => f.status !== 'removed' && /\.ts$/.test(f.path)).slice(0, 80).map(f => f.path));
+    if (tree) tree.filter(p => /\.module\.ts$/.test(p) && !p.includes('node_modules')).slice(0, 80).forEach(p => want.add(p));
+    const contents = new Map(); let done = 0; const list = [...want];
+    await pool(list, 6, async p => { const t = await fetchContent(full, sha, p); contents.set(p, t); setStatus(`Reading file contents… ${++done} of ${list.length}`); });
+    show(buildModel({ files, contents, tree, meta: { title: pr.title, repo: `${owner}/${repo}`, number: +num, author: pr.user && pr.user.login, url: pr.html_url } }));
+    setStatus(contents.size < list.length ? `Mapped with ${contents.size} of ${list.length} file contents; the rest use the diff alone.` : '');
+  } catch (e) {
+    setStatus('Loading stopped partway: ' + (e.status === 403 ? 'GitHub’s rate limit was reached. Add a token and try again.' : 'GitHub returned an error.'), true);
+  }
+}
+$('#loadForm').addEventListener('submit', e => { e.preventDefault(); const v = $('#prUrl').value.trim(); if (v) loadPR(v); });
+
+function loadExample() {
+  pendingCtx = null; $('#sheet').hidden = true; setStatus('');
+  show(buildModel({ files: parseUnifiedDiff($('#sample').textContent.replace(/^\n/, '')), contents: new Map(), tree: null, meta: { title: 'Add JWT login and hash user passwords', repo: 'example/shop-api', number: 42, author: 'example', example: true } }));
+}
+loadExample();
+})();
+</script>
+</body>
+</html>
