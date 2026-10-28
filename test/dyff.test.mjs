@@ -212,6 +212,12 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     const edited = first + '\nA note added later';
     assert.equal(embedSection(edited, 'report v2'), edited.replace('report v1', 'report v2'));
     assert.equal(embedSection('', 'r'), '<!-- dyff:start -->\nr\n<!-- dyff:end -->\n');
+    // Markers mentioned inline are not section boundaries.
+    const mention = 'Sits between `<!-- dyff:start -->` / `<!-- dyff:end -->`.';
+    assert.equal(embedSection(mention, 'r'), mention + '\n\n---\n\n<!-- dyff:start -->\nr\n<!-- dyff:end -->\n');
+    // Descriptions edited on github.com use CRLF line endings.
+    const crlf = 'Intro\r\n\r\n<!-- dyff:start -->\r\nold\r\n<!-- dyff:end -->\r\nOutro';
+    assert.equal(embedSection(crlf, 'new'), 'Intro\r\n\r\n<!-- dyff:start -->\nnew\n<!-- dyff:end -->\r\nOutro');
   });
 
   it('exports the viewer as one self-contained HTML file', () => {

@@ -100,13 +100,14 @@ export const EMBED_END = '<!-- dyff:end -->';
 
 /**
  * Put `section` into `body` between dyff markers: replaces an earlier dyff
- * section, or appends one. Everything else in `body` is kept as is.
+ * section, or appends one. Everything else in `body` is kept as is. Markers
+ * only count on a line of their own, so a description can mention them.
  */
 export function embedSection(body: string, section: string): string {
   const block = `${EMBED_START}\n${section.trim()}\n${EMBED_END}`;
-  const start = body.indexOf(EMBED_START);
-  const end = body.indexOf(EMBED_END, start);
-  if (start >= 0 && end >= 0) return body.slice(0, start) + block + body.slice(end + EMBED_END.length);
+  const start = /^<!-- dyff:start -->\r?$/m.exec(body);
+  const end = start && /^<!-- dyff:end -->\r?$/m.exec(body.slice(start.index));
+  if (start && end) return body.slice(0, start.index) + block + body.slice(start.index + end.index + EMBED_END.length);
   const rest = body.trimEnd();
   return (rest ? rest + '\n\n---\n\n' : '') + block + '\n';
 }
