@@ -1,6 +1,6 @@
 {
   "name": "@hansvertriest/dyff",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Index a NestJS codebase into a symbol/reference graph and overlay pull requests on it: changed symbols, broken callers, affected routes, module cycles and test reach.",
   "keywords": [
     "nestjs",
