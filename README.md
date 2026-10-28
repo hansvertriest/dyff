@@ -47,6 +47,20 @@ dyff report merged.json -o report.md
 dyff pr --base base.json --base-ref origin/main -o merged.json --report report.md
 ```
 
+```sh
+# Look at the result
+dyff serve merged.json                    # interactive PR map on http://127.0.0.1:4173
+dyff html merged.json -o pr-map.html      # the same page as one self-contained file
+dyff report merged.json --map             # Markdown with a Mermaid module map (renders on GitHub)
+
+# Keep a dyff section up to date inside a PR description
+gh pr view 12 --json body -q .body > body.md
+dyff report merged.json --map --embed-in body.md -o body.md
+gh pr edit 12 --body-file body.md
+```
+
+`--embed-in` places the report between `<!-- dyff:start -->` and `<!-- dyff:end -->` markers: an earlier dyff section is replaced, the rest of the description is kept.
+
 Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for stdin (for example `gh pr diff 123 | dyff overlay --diff -`). The working tree must be the PR's head, and diff paths must be relative to `--root`. dyff rebuilds the base version of each changed file by reverse-applying the diff.
 
 | Option | |

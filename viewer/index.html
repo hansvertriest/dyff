@@ -577,7 +577,7 @@ function title() {
 }
 
 /* ---------- Load ---------- */
-fetch('index.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(data => {
+(window.DYFF_DATA ? Promise.resolve(window.DYFF_DATA) : fetch('index.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })).then(data => {
   D = data;
   if (!D.checks) { $('#pin').innerHTML = '<p class="empty">This index has no PR checks. Serve the output of <code>dyff merge</code> or <code>dyff pr</code>.</p>'; return; }
   const pr = D.pr || {};

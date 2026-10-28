@@ -3,8 +3,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { buildBaseIndex, buildOverlay } from './indexer.js';
 import { merge } from './merge.js';
-import { markdownReport } from './report.js';
-import { serve } from './serve.js';
+import { embedSection, markdownReport } from './report.js';
+import { serve, standaloneHtml } from './serve.js';
 import type { Index } from './schema.js';
 
 const HELP = `dyff: map NestJS pull requests onto a codebase graph
@@ -14,7 +14,8 @@ Usage
   dyff overlay (--base-ref <ref> | --diff <file|->) [project options] [-o overlay.json]
   dyff merge   <base.json> <overlay.json> [--depth N] [-o merged.json]
   dyff pr      --base <base.json> (--base-ref <ref> | --diff <file|->) [project options] [-o merged.json] [--report report.md]
-  dyff report  <merged.json> [--limit N] [-o report.md]
+  dyff report  <merged.json> [--map] [--link <url>] [--embed-in <body.md>] [--limit N] [-o report.md]
+  dyff html    <merged.json> [-o pr-map.html]
   dyff serve   <merged.json> [--port 4173] [--host 127.0.0.1]
 
 Commands
@@ -26,7 +27,12 @@ Commands
             broken references, signature changes, module dependencies and
             cycles, affected routes and test reach.
   pr        overlay + merge in one step.
-  report    Markdown summary of a merged index, for a PR comment.
+  report    Markdown summary of a merged index, for a PR comment or description.
+            --map adds a Mermaid module map, --link a link to the interactive
+            page. --embed-in <file> prints that file with the report placed
+            between dyff markers (replacing an earlier report), for updating
+            a PR description in place.
+  html      The interactive page as one self-contained HTML file.
   serve     Open a merged index in the browser: module map, review checks,
             changed symbols with their diffs, callers and routes.
 
@@ -64,6 +70,9 @@ async function main(argv: string[]): Promise<void> {
       depth: { type: 'string' },
       limit: { type: 'string' },
       report: { type: 'string' },
+      map: { type: 'boolean' },
+      link: { type: 'string' },
+      'embed-in': { type: 'string' },
       port: { type: 'string' },
       host: { type: 'string' },
       out: { type: 'string', short: 'o' },
@@ -129,9 +138,21 @@ async function main(argv: string[]): Promise<void> {
       process.stderr.write(`dyff viewer running at ${url}  (Ctrl+C to stop)\n`);
       break;
     }
-    case 'report':
-      write(markdownReport(readIndex(args[0], 'merged index path'), { limit: v.limit ? Number(v.limit) : undefined }));
+    case 'report': {
+      const md = markdownReport(readIndex(args[0], 'merged index path'), {
+        limit: v.limit ? Number(v.limit) : undefined,
+        map: v.map,
+        link: v.link,
+      });
+      write(v['embed-in'] !== undefined ? embedSection(readFileSync(v['embed-in'], 'utf8'), md) : md);
       break;
+    }
+    case 'html': {
+      const index = readIndex(args[0], 'merged index path');
+      if (!index.checks) throw new UsageError('html needs a merged index (output of dyff merge or dyff pr).');
+      write(standaloneHtml(index));
+      break;
+    }
     default:
       throw new UsageError(`Unknown command "${cmd}".`);
   }

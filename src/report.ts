@@ -1,4 +1,16 @@
+import { mermaidModuleMap } from './mermaid.js';
 import type { Index, Route } from './schema.js';
+
+export interface ReportOptions {
+  /** Most items per list. Default 25. */
+  limit?: number;
+  /** Include a Mermaid module map. */
+  map?: boolean;
+  /** Link to the interactive page. */
+  link?: string;
+  /** Heading of the report. */
+  title?: string;
+}
 
 const short = (id: string) => (id.includes('#') ? id.slice(id.indexOf('#') + 1) : id);
 const code = (s: string) => '`' + s.replace(/`/g, "'") + '`';
@@ -10,7 +22,7 @@ export function routeLabel(route: Route, globalPrefix?: string): string {
 }
 
 /** Markdown summary of a merged index, meant for a PR comment. */
-export function markdownReport(index: Index, opts: { limit?: number } = {}): string {
+export function markdownReport(index: Index, opts: ReportOptions = {}): string {
   const c = index.checks;
   if (!c) throw new Error('The report needs a merged index (dyff merge or dyff pr).');
   const limit = opts.limit ?? 25;
@@ -23,11 +35,16 @@ export function markdownReport(index: Index, opts: { limit?: number } = {}): str
   };
 
   const s = c.summary;
-  out.push('## dyff: PR map', '');
+  out.push(`## ${opts.title ?? 'dyff: PR map'}`, '');
   out.push(
     `${s.filesChanged} files changed (+${s.additions} −${s.deletions}) · symbols: ${s.symbols.added} added, ${s.symbols.modified} modified, ${s.symbols.removed} removed`,
     '',
   );
+  if (opts.link) out.push(`**[Open the interactive PR map](${opts.link})**`, '');
+  if (opts.map) {
+    const map = mermaidModuleMap(index);
+    if (map) out.push(map, '', '<sub>Colored: changed modules · dashed: modules that use changed code · solid arrows: <code>@Module</code> imports · dotted: file imports · blue: new in this PR · red: circular</sub>', '');
+  }
   if (s.changedModules.length) out.push(`**Changed modules:** ${s.changedModules.map(code).join(', ')}`, '');
   if (s.affectedModules.length) out.push(`**Modules that use changed code:** ${s.affectedModules.map(code).join(', ')}`, '');
 
@@ -76,4 +93,20 @@ export function markdownReport(index: Index, opts: { limit?: number } = {}): str
     list(c.untested, (id) => code(short(id)));
   }
   return out.join('\n').trimEnd() + '\n';
+}
+
+export const EMBED_START = '<!-- dyff:start -->';
+export const EMBED_END = '<!-- dyff:end -->';
+
+/**
+ * Put `section` into `body` between dyff markers: replaces an earlier dyff
+ * section, or appends one. Everything else in `body` is kept as is.
+ */
+export function embedSection(body: string, section: string): string {
+  const block = `${EMBED_START}\n${section.trim()}\n${EMBED_END}`;
+  const start = body.indexOf(EMBED_START);
+  const end = body.indexOf(EMBED_END, start);
+  if (start >= 0 && end >= 0) return body.slice(0, start) + block + body.slice(end + EMBED_END.length);
+  const rest = body.trimEnd();
+  return (rest ? rest + '\n\n---\n\n' : '') + block + '\n';
 }

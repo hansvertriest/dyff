@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, markdownReport, merge, parseUnifiedDiff, reverseApply, sliceHunks } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reverseApply, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const git = (cwd, ...args) =>
@@ -194,6 +194,30 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.deepEqual(findByEmail.references, ['src/auth/auth.service.ts#AuthService.validateUser']);
     assert.ok(node(merged, 'src/reports/reports.controller.ts#ReportsController.users'));
     assert.equal(node(merged, 'src/users/users.service.ts#UsersService.findAllLegacy').change.status, 'removed');
+  });
+
+  it('draws a Mermaid module map with new and circular edges', () => {
+    const map = mermaidModuleMap(merged);
+    assert.match(map, /^```mermaid\nflowchart LR/);
+    assert.match(map, /AuthModule<\/b><br\/>src\/auth · \+\d+ −0"\]:::added/);
+    assert.match(map, /ReportsModule<\/b><br\/>src\/reports · uses changed code"\]:::affected/);
+    assert.match(map, /-->\|forwardRef\|/);
+    assert.match(map, /linkStyle \d+ stroke:#B83A33,stroke-width:2.5px/);
+    assert.match(markdownReport(merged, { map: true, link: 'https://example.com/run' }), /```mermaid[\s\S]*Open the interactive PR map\]\(https:\/\/example.com\/run\)|Open the interactive PR map[\s\S]*```mermaid/);
+  });
+
+  it('embeds the report in a PR description and replaces it on later runs', () => {
+    const first = embedSection('My description\n', 'report v1');
+    assert.equal(first, 'My description\n\n---\n\n<!-- dyff:start -->\nreport v1\n<!-- dyff:end -->\n');
+    const edited = first + '\nA note added later';
+    assert.equal(embedSection(edited, 'report v2'), edited.replace('report v1', 'report v2'));
+    assert.equal(embedSection('', 'r'), '<!-- dyff:start -->\nr\n<!-- dyff:end -->\n');
+  });
+
+  it('exports the viewer as one self-contained HTML file', () => {
+    const html = standaloneHtml(merged);
+    assert.match(html, /<script>window\.DYFF_DATA = \{/);
+    assert.ok(!html.slice(html.indexOf('DYFF_DATA'), html.indexOf('</script>', html.indexOf('DYFF_DATA'))).includes('<'));
   });
 
   it('writes a markdown report', () => {

@@ -4,5 +4,6 @@ export { parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './dif
 export { finalize, moduleAssigner } from './finalize.js';
 export { buildBaseIndex, buildOverlay, type OverlayOptions } from './indexer.js';
 export { findCycles, merge, moduleEdges, type MergeOptions } from './merge.js';
-export { markdownReport, routeLabel } from './report.js';
-export { serve, type ServeOptions } from './serve.js';
+export { EMBED_END, EMBED_START, embedSection, markdownReport, routeLabel, type ReportOptions } from './report.js';
+export { mermaidModuleMap, type MermaidOptions } from './mermaid.js';
+export { serve, standaloneHtml, type ServeOptions } from './serve.js';

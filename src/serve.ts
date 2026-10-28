@@ -3,6 +3,14 @@ import { createServer, type Server } from 'node:http';
 
 const VIEWER = new URL('../viewer/index.html', import.meta.url);
 
+/** The viewer as one self-contained HTML file with the index embedded. */
+export function standaloneHtml(index: unknown): string {
+  const json = JSON.stringify(index).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  const html = readFileSync(VIEWER, 'utf8');
+  const at = html.indexOf('<script>');
+  return html.slice(0, at) + `<script>window.DYFF_DATA = ${json};</script>\n` + html.slice(at);
+}
+
 export interface ServeOptions {
   port?: number;
   host?: string;
