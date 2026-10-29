@@ -85,6 +85,18 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 | `--pretty` | Indented JSON |
 | `-q, --quiet` | No progress output on stderr |
 
+### Review comments
+
+In `dyff serve` or a `dyff html` page, hover any diff line and click **+** to comment on it. The summary lists your comments and has a box for an overall comment. Comments stay in your browser, per head commit, until you delete them.
+
+**Download comments** saves a JSON file that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyff.context` list with each comment's line of code and symbol. Hand it to Claude to put on the PR, or post it yourself:
+
+```sh
+gh api repos/{owner}/{repo}/pulls/12/reviews --input dyff-review-1a2b3c4.json
+```
+
+The file has no `event`, so GitHub creates a pending review that you submit from the PR page.
+
 ### In CI: a PR map in every PR description (GitHub Actions)
 
 Add dyff as a dev dependency (`npm install --save-dev @hansvertriest/dyff`), then add `.github/workflows/dyff.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyff section in the PR description up to date, and attaches the interactive page to the run:

@@ -200,6 +200,26 @@ details.file>summary.fhead:hover{background:var(--line)}
 .foot{margin-top:28px;font-size:12.5px;color:var(--muted)}
 .empty{padding:40px;color:var(--muted)}
 
+.hbtn{border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:6px 12px;font-size:13px;font-weight:500}
+.hbtn:hover{border-color:var(--edge)}
+.dl{position:relative}
+.cadd{position:absolute;left:2px;top:50%;transform:translateY(-50%);width:18px;height:18px;padding:0;border:0;border-radius:5px;background:var(--accent);color:var(--surface);font:600 14px/18px var(--sans);opacity:0}
+.dl:hover .cadd,.cadd:focus-visible{opacity:1}
+@media (hover: none){.cadd{opacity:.55}}
+.cthread{position:sticky;left:0;font-family:var(--sans);font-size:13px}
+.cthread:empty{display:none}
+.cthread>div{margin:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:8px 10px}
+.cbody{white-space:pre-wrap;word-break:break-word;margin:0 0 4px}
+.cact{display:flex;gap:10px;align-items:center}
+.cform textarea{display:block;width:100%;min-height:64px;resize:vertical;margin:0 0 8px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:13px/1.45 var(--sans)}
+.cform .primary{border:0;border-radius:6px;background:var(--accent);color:var(--surface);padding:4px 12px;font-size:13px;font-weight:500}
+.cform .hint{font-size:12px;color:var(--muted)}
+.overall{display:block;width:100%;min-height:64px;resize:vertical;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:13px/1.45 var(--sans);margin:0 0 10px}
+.check .crow{display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:8px 12px}
+.check .crow:first-child{border-top:0}
+.crow .main{flex:1;min-width:0}
+.crow .cbody{font-size:13px;margin:2px 0 0}
+
 @media (max-width: 960px){
   body{height:auto;min-height:100%}
   main{display:block}
@@ -223,6 +243,7 @@ details.file>summary.fhead:hover{background:var(--line)}
     <input id="q" type="search" placeholder="Find a class, method or route…" autocomplete="off" spellcheck="false" aria-label="Find a symbol">
     <div class="results" id="results" hidden></div>
   </div>
+  <button class="hbtn" id="dlReview" type="button" hidden title="A GitHub pull request review, with each comment's line of code and symbol for context">Download comments</button>
 </header>
 <main>
   <section class="stage" aria-label="Module graph">
@@ -488,14 +509,19 @@ function hl(text) {
   }
   return out + esc(text.slice(last));
 }
-function diffBlock(hunks) {
+/** A diff of `path`. Each line can take review comments; `sym` is the symbol the diff belongs to, for context. */
+function diffBlock(hunks, path, sym) {
   if (!hunks || !hunks.length) return '';
-  let html = '<div class="diff">';
+  let html = `<div class="diff"${sym ? ` data-csym="${esc(sym)}"` : ''}>`;
   hunks.forEach((h, i) => {
     if (i) html += '<div class="dl gap"><span class="ln"></span><span class="ln"></span><span></span><span>⋯</span></div>';
     for (const l of h.lines) {
       const cls = l.t === '+' ? 'add' : l.t === '-' ? 'del' : '';
-      html += `<div class="dl ${cls}"><span class="ln">${l.o ?? ''}</span><span class="ln">${l.t === '-' ? '' : l.n ?? ''}</span><span class="sg">${l.t === ' ' ? '' : l.t === '-' ? '−' : '+'}</span><span>${hl(l.text) || ' '}</span></div>`;
+      // GitHub's review comment position: deleted lines are on the base side, the rest on the head side.
+      const side = l.t === '-' ? 'LEFT' : 'RIGHT', line = l.t === '-' ? l.o : l.n;
+      const add = path && line ? `<button class="cadd" type="button" data-c="add" aria-label="Comment on line ${line}" title="Comment on this line">+</button>` : '';
+      html += `<div class="dl ${cls}"><span class="ln">${add}${l.o ?? ''}</span><span class="ln">${l.t === '-' ? '' : l.n ?? ''}</span><span class="sg">${l.t === ' ' ? '' : l.t === '-' ? '−' : '+'}</span><span>${hl(l.text) || ' '}</span></div>`;
+      if (add) html += `<div class="cthread" data-path="${esc(path)}" data-side="${side}" data-line="${line}">${threadHtml(path, side, line)}</div>`;
     }
   });
   return html + '</div>';
@@ -542,12 +568,133 @@ function renderSummary() {
     ${C.removedModuleDependencies.length ? section('Removed module dependencies', C.removedModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via}</span></button>`) : ''}
     ${section('Affected routes', C.affectedRoutes, r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(id => `<span>${esc(symLabel(id))}</span>`).join('')}</span></button>`)}
     ${section('Changed code no test reaches', C.untested, id => `<button class="row" data-sym="${esc(id)}"><span class="main"><code>${esc(symLabel(id))}</code></span><span class="sub">${esc(byId.get(id)?.file)}</span></button>`, false)}
+    ${reviewSection()}
     <h3>What changed<span class="count">${changedFiles().length} files</span></h3>
     ${changedFiles().map(f => fileSection(f, true)).join('')}
     <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
     ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
     <p class="foot">Select a module in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Solid arrows are <code>@Module</code> imports, dotted ones are file imports only. Blue arrows are new in this PR, purple ones are part of a cycle that already existed, red ones are removed or part of a cycle this PR creates.</p>`;
 }
+
+/* ---------- Review comments ---------- */
+// Kept in this browser per head commit, so they survive reloads and a new `dyff serve`.
+let review = { body: '', comments: [] };
+const reviewKey = () => 'dyff-review:' + (D.pr?.headCommit || D.root);
+function loadReview() {
+  try {
+    const r = JSON.parse(localStorage.getItem(reviewKey()) || 'null');
+    if (r && Array.isArray(r.comments)) review = { body: String(r.body || ''), comments: r.comments };
+  } catch { /* storage unavailable */ }
+  updateReviewButton();
+}
+function saveReview() {
+  try { localStorage.setItem(reviewKey(), JSON.stringify(review)); } catch { /* storage unavailable */ }
+  updateReviewButton();
+}
+function updateReviewButton() {
+  const n = review.comments.length, b = $('#dlReview');
+  b.hidden = !n && !review.body.trim();
+  b.textContent = n ? `Download ${plural(n, 'comment')}` : 'Download review';
+}
+const byPosition = (a, b) => a.path.localeCompare(b.path) || (a.side === b.side ? a.line - b.line : a.side === 'LEFT' ? -1 : 1) || a.created - b.created;
+const lineComments = (path, side, line) => review.comments.filter(c => c.path === path && c.side === side && c.line === +line);
+const commentHtml = c => `<div class="cmt" data-id="${esc(c.id)}"><p class="cbody">${esc(c.body)}</p><div class="cact"><button class="linkbtn" type="button" data-c="edit">Edit</button><button class="linkbtn" type="button" data-c="del">Delete</button></div></div>`;
+const threadHtml = (path, side, line) => lineComments(path, side, line).map(commentHtml).join('');
+const formHtml = (text = '', id = '') => `<div class="cform"${id ? ` data-id="${esc(id)}"` : ''}><textarea aria-label="Comment" placeholder="Comment on this line">${esc(text)}</textarea><div class="cact"><button class="primary" type="button" data-c="save">${id ? 'Save' : 'Comment'}</button><button class="linkbtn" type="button" data-c="cancel">Cancel</button><span class="hint">⌘/Ctrl+Enter to save</span></div></div>`;
+/** Re-render every thread of one line: the same line can show in a symbol's diff and in the whole file diff. */
+function refreshThreads(path, side, line) {
+  for (const t of document.querySelectorAll(`.cthread[data-path="${CSS.escape(path)}"][data-side="${side}"][data-line="${line}"]`))
+    t.innerHTML = threadHtml(path, side, line);
+}
+function openForm(thread, text, id) {
+  const f = thread.querySelector('.cform');
+  if (f) { f.querySelector('textarea').focus(); return; }
+  thread.insertAdjacentHTML('beforeend', formHtml(text, id));
+  const ta = thread.querySelector('.cform textarea');
+  ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+function saveForm(form) {
+  const t = form.closest('.cthread'), body = form.querySelector('textarea').value.trim();
+  const { path, side } = t.dataset, line = +t.dataset.line;
+  const existing = form.dataset.id && review.comments.find(c => c.id === form.dataset.id);
+  if (existing) {
+    if (body) existing.body = body;
+    else review.comments = review.comments.filter(c => c !== existing);
+  } else if (body) {
+    const row = t.previousElementSibling;
+    review.comments.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      path, side, line, body,
+      symbol: t.closest('.diff').dataset.csym || null,
+      code: row.lastElementChild.textContent,
+      created: Date.now(),
+    });
+  }
+  saveReview();
+  refreshThreads(path, side, line);
+  refreshReviewList();
+}
+function refreshReviewList() {
+  if (view.type !== 'summary') return;
+  $('#reviewList').outerHTML = reviewList();
+  $('#reviewCount').textContent = review.comments.length;
+}
+function reviewList() {
+  const cs = review.comments.slice().sort(byPosition);
+  return `<div id="reviewList">${cs.length ? `<div class="check">${cs.map(c => `<div class="crow"><span class="main"><span class="sub" style="font:12px var(--mono);color:var(--muted)">${esc(c.path)}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol && byId.has(c.symbol) && byId.get(c.symbol).kind !== 'file' ? ' · ' + esc(short(c.symbol)) : ''}</span><p class="cbody">${esc(c.body)}</p></span><button class="linkbtn" type="button" data-c="del-list" data-id="${esc(c.id)}">Delete</button></div>`).join('')}</div>` : '<p class="note">Hover a line in any diff below and click <b>+</b> to comment on it.</p>'}</div>`;
+}
+function reviewSection() {
+  return `<h3>Your review<span class="count" id="reviewCount">${review.comments.length}</span></h3>
+    <textarea class="overall" id="overall" aria-label="Overall comment" placeholder="Overall comment (optional)">${esc(review.body)}</textarea>
+    ${reviewList()}`;
+}
+function downloadReview() {
+  const pr = D.pr || {}, cs = review.comments.slice().sort(byPosition);
+  // The body of GitHub's "create a review" call. Without an `event` it becomes a pending review to submit on GitHub.
+  const out = {
+    ...(pr.headCommit ? { commit_id: pr.headCommit } : {}),
+    ...(review.body.trim() ? { body: review.body.trim() } : {}),
+    comments: cs.map(c => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+    dyff: {
+      root: D.root,
+      ...(pr.baseRef ? { baseRef: pr.baseRef } : {}),
+      ...(pr.baseCommit ? { baseCommit: pr.baseCommit } : {}),
+      ...(pr.headCommit ? { headCommit: pr.headCommit } : {}),
+      // Same order as `comments`: the commented line and the symbol it is in.
+      context: cs.map(c => ({ path: c.path, line: c.line, side: c.side, code: c.code, ...(c.symbol ? { symbol: c.symbol } : {}) })),
+    },
+  };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' }));
+  a.download = `dyff-review${pr.headCommit ? '-' + pr.headCommit.slice(0, 7) : ''}.json`;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-c]');
+  if (!b) return;
+  const c = b.dataset.c, t = b.closest('.cthread');
+  if (c === 'add') openForm(b.closest('.dl').nextElementSibling);
+  else if (c === 'save') saveForm(b.closest('.cform'));
+  else if (c === 'cancel') refreshThreads(t.dataset.path, t.dataset.side, t.dataset.line);
+  else if (c === 'edit') { const el = b.closest('.cmt'), cm = review.comments.find(x => x.id === el.dataset.id); el.remove(); openForm(t, cm?.body || '', el.dataset.id); }
+  else if (c === 'del' || c === 'del-list') {
+    const id = c === 'del' ? b.closest('.cmt').dataset.id : b.dataset.id, cm = review.comments.find(x => x.id === id);
+    if (!cm) return;
+    review.comments = review.comments.filter(x => x !== cm);
+    saveReview();
+    refreshThreads(cm.path, cm.side, cm.line);
+    refreshReviewList();
+  }
+});
+document.addEventListener('keydown', e => {
+  const f = e.target.closest?.('.cform');
+  if (!f) return;
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveForm(f); }
+  else if (e.key === 'Escape') f.querySelector('[data-c="cancel"]').click();
+});
+document.addEventListener('input', e => { if (e.target.id === 'overall') { review.body = e.target.value; saveReview(); } });
+$('#dlReview').addEventListener('click', downloadReview);
 
 /* ---------- Files ---------- */
 const bySize = (a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions);
@@ -557,13 +704,13 @@ function fileSection(f, collapsed = false) {
   const symHtml = syms.map(s => {
     const c = counts(s.change.hunks);
     return `<details class="sym"${syms.length <= 4 ? ' open' : ''}><summary><span class="sname">${esc(s.kind === 'file' ? 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
-      <div class="sbody">${diffBlock(s.change.hunks)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
+      <div class="sbody">${diffBlock(s.change.hunks, f.path, s.id)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
   }).join('');
   const ch = f.change;
   const head = `<span class="badge b-${ch.status}">${statusWord(ch.status)}</span>${f.test ? '<span class="badge b-test">test</span>' : ''}${f.other ? '<span class="badge">not analyzed</span>' : ''}<span class="fname">${esc(baseOf(f.path))} <span>${esc(dirOf(f.path))}</span></span><span class="n-a">+${ch.additions}</span><span class="n-d">−${ch.deletions}</span>`;
   const whole = !ch.hunks.length ? '<p class="note" style="padding:10px 12px;margin:0">No text diff (binary file, or only renamed).</p>'
-    : syms.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(ch.hunks)}</div></details>`
-    : `<div class="sbody" style="padding-top:12px">${diffBlock(ch.hunks)}</div>`;
+    : syms.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(ch.hunks, f.path)}</div></details>`
+    : `<div class="sbody" style="padding-top:12px">${diffBlock(ch.hunks, f.path)}</div>`;
   const body = `${ch.oldPath ? `<p class="note" style="padding:6px 12px 0;margin:0">Renamed from ${esc(ch.oldPath)}</p>` : ''}${symHtml}${whole}`;
   return collapsed
     ? `<details class="file"><summary class="fhead">${head}</summary>${body}</details>`
@@ -638,7 +785,7 @@ function renderSymbol(id) {
     ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
-    ${file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks)}` : ''}
+    ${file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
     ${tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : ''}
     ${n.injects ? `<h3>Injects</h3><div class="refs">${n.injects.map(i => i.target ? symBtn(i.target, ` · ${esc(i.param)}${i.kind !== 'class' ? ' via ' + esc(i.decorator || 'token') + ' ' + esc(tokenLabel(i.token)) : ''}`) : `<button disabled>${esc(i.param)} <small>${esc(tokenLabel(i.token))}</small></button>`).join('')}</div>` : ''}
@@ -710,7 +857,7 @@ $('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.no
 $('#canvas').addEventListener('mouseleave', () => hoverLinks(null));
 $('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && view.type !== 'summary' && document.activeElement !== $('#q')) back(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && view.type !== 'summary' && document.activeElement !== $('#q') && !e.target.closest?.('textarea')) back(); });
 
 /* ---------- Search ---------- */
 let searchIndex = [];
@@ -739,6 +886,7 @@ function title() {
   const pr = D.pr || {};
   $('#prTitle').innerHTML = `${esc(baseOf(D.root))} · ${esc(title())}${pr.headCommit ? `<small>${esc(pr.baseCommit?.slice(0, 7) || '')}…${esc(pr.headCommit.slice(0, 7))}</small>` : ''}`;
   document.title = `dyff · ${baseOf(D.root)}`;
+  loadReview();
   searchIndex = [
     ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
     ...D.modules.map(m => ({ mod: m.id, label: m.name, sub: m.id, key: (m.name + ' ' + m.id).toLowerCase() })),
