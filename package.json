@@ -1,9 +1,10 @@
 {
   "name": "@hansvertriest/dyff",
   "version": "0.1.2",
-  "description": "Index a NestJS codebase into a symbol/reference graph and overlay pull requests on it: changed symbols, broken callers, affected routes, module cycles and test reach.",
+  "description": "Index a NestJS or Vue codebase into a symbol/reference graph and overlay pull requests on it: changed symbols, broken callers, affected routes, module cycles and test reach.",
   "keywords": [
     "nestjs",
+    "vue",
     "pull-request",
     "code-review",
     "ts-morph",

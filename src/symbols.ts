@@ -271,6 +271,8 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
     }
   }
 
+  collectRoutes(sf, add);
+
   const fileHash = hash(topLevelOther.join('\n'));
   const fileNode: CollectedNode = {
     id: path,
@@ -285,6 +287,44 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
   byDecl.set(sf, path);
   nodes.unshift(fileNode);
   return { path, nodes, byDecl, fileHash, controllerPrefix };
+}
+
+/** The string value of property `key` of an object literal. */
+function stringProp(o: ts.ObjectLiteralExpression, key: string): string | undefined {
+  for (const p of o.properties)
+    if (ts.isPropertyAssignment(p) && nameOf(p) === key && ts.isStringLiteralLike(p.initializer)) return p.initializer.text;
+  return undefined;
+}
+
+const hasProp = (o: ts.ObjectLiteralExpression, key: string) =>
+  o.properties.some((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isMethodDeclaration(p)) && nameOf(p) === key);
+
+/**
+ * vue-router route records (`{ path: '/orders', component: OrdersView }`) become
+ * `route` nodes, so the components they render, and everything those use, lead
+ * up to a page. Nested `children` paths are joined with their parents'.
+ */
+function collectRoutes(sf: ts.SourceFile, add: (decl: ts.Node, kind: NodeKind, name: string, extra?: Partial<CollectedNode>) => CollectedNode) {
+  const parentPath = (o: ts.ObjectLiteralExpression): string | undefined => {
+    const arr = o.parent;
+    const prop = arr && ts.isArrayLiteralExpression(arr) ? arr.parent : undefined;
+    const parent = prop && ts.isPropertyAssignment(prop) && nameOf(prop) === 'children' ? prop.parent : undefined;
+    if (!parent || !ts.isObjectLiteralExpression(parent)) return undefined;
+    const own = stringProp(parent, 'path');
+    if (own === undefined) return undefined;
+    return own.startsWith('/') ? own : joinPath(parentPath(parent), own);
+  };
+  const visit = (n: ts.Node) => {
+    if (ts.isObjectLiteralExpression(n)) {
+      const path = stringProp(n, 'path');
+      if (path !== undefined && (hasProp(n, 'component') || hasProp(n, 'components'))) {
+        const fullPath = path.startsWith('/') ? joinPath(path) : joinPath(parentPath(n), path);
+        add(n, 'route', fullPath, { route: { type: 'page', verb: 'PAGE', path, fullPath } });
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
 }
 
 /** Find `app.setGlobalPrefix('x')` in a file. */

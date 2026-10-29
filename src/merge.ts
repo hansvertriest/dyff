@@ -176,8 +176,11 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
   const isNewCycle = (c: string[]) => !baseCycleOf.has(c[0]) || c.some((m) => baseCycleOf.get(m) !== baseCycleOf.get(c[0]));
 
   // Seeds: the most specific changed symbols (a class only counts when none of its members changed).
+  // A .vue file counts too: its file-level code includes the template.
   const changedParents = new Set(changed.map((n) => n.parent).filter(Boolean));
-  const seeds = changed.filter((n) => n.kind !== 'file' && !n.test && !(n.kind === 'class' && changedParents.has(n.id)));
+  const seeds = changed.filter(
+    (n) => (n.kind !== 'file' || n.file.endsWith('.vue')) && !n.test && !(n.kind === 'class' && changedParents.has(n.id)),
+  );
 
   // A type-only reference (annotation, generic, implements) is followed one step, from the
   // changed symbol itself, and the search stops there: the referrer's runtime code is unchanged.

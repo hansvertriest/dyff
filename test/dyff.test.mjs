@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reverseApply, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
+const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
 const git = (cwd, ...args) =>
   execFileSync('git', ['-c', 'user.name=dyff', '-c', 'user.email=dyff@example.com', ...args], { cwd, encoding: 'utf8' });
 
@@ -288,5 +289,60 @@ describe('cycles that exist before the PR', () => {
 
     assert.deepEqual(merged.checks.cycles, [['src', 'src/a', 'src/b']]);
     assert.deepEqual(merged.checks.newCycles, []);
+  });
+});
+
+describe('Vue fixture: single-file components and vue-router routes', () => {
+  let dir, base, merged;
+  const node = (index, id) => index.nodes.find((n) => n.id === id);
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    cpSync(join(vueFixture, 'base'), dir, { recursive: true });
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    base = buildBaseIndex({ root: dir });
+
+    git(dir, 'checkout', '-qb', 'feature');
+    cpSync(join(vueFixture, 'pr'), dir, { recursive: true });
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'pr');
+    merged = merge(base, buildOverlay({ root: dir, baseRef: 'main' }));
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('indexes script setup declarations at their line in the .vue file', () => {
+    assert.deepEqual(node(base, 'src/views/OrdersView.vue#refresh').range, [7, 9]);
+    assert.deepEqual(node(base, 'src/views/OrdersView.vue').range, [1, 21]);
+  });
+
+  it('links components and functions the template uses, and imports of .vue files through aliases', () => {
+    assert.deepEqual(node(base, 'src/components/OrderRow.vue').references, ['src/views/OrderDetail.vue', 'src/views/OrdersView.vue']);
+    assert.deepEqual(node(base, 'src/composables/useOrders.ts#formatTotal').references, ['src/components/OrderRow.vue']);
+    assert.ok(node(base, 'src/views/OrdersView.vue').uses.includes('src/views/OrdersView.vue#refresh'));
+  });
+
+  it('turns vue-router records into page routes, with nested and lazily loaded components', () => {
+    const routes = base.nodes.filter((n) => n.kind === 'route').map((n) => [n.route.fullPath, n.uses]);
+    assert.deepEqual(routes, [
+      ['/orders', ['src/views/OrdersView.vue']],
+      ['/orders/:id', ['src/views/OrderDetail.vue']],
+    ]);
+  });
+
+  it('follows changed composables and template-only changes up to the pages', () => {
+    const view = node(merged, 'src/views/OrdersView.vue');
+    assert.equal(view.change.status, 'modified');
+    assert.equal(node(merged, 'src/views/OrdersView.vue#refresh').change, undefined);
+    const sig = merged.checks.signatureChanges.find((s) => s.id === 'src/composables/useOrders.ts#formatTotal');
+    assert.deepEqual(sig.callersOutsidePr, ['src/components/OrderRow.vue']);
+    assert.deepEqual(
+      merged.checks.affectedRoutes.map((r) => [r.route.fullPath, r.chain]),
+      [
+        ['/orders', ['src/views/OrdersView.vue', 'src/router/index.ts#/orders']],
+        ['/orders/:id', ['src/composables/useOrders.ts#formatTotal', 'src/components/OrderRow.vue', 'src/views/OrderDetail.vue', 'src/router/index.ts#/orders/:id']],
+      ],
+    );
   });
 });

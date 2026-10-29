@@ -7,7 +7,7 @@ import { embedSection, markdownReport } from './report.js';
 import { serve, standaloneHtml } from './serve.js';
 import type { Index } from './schema.js';
 
-const HELP = `dyff: map NestJS pull requests onto a codebase graph
+const HELP = `dyff: map NestJS and Vue pull requests onto a codebase graph
 
 Usage
   dyff index   [project options] [-o base.json]
@@ -40,7 +40,7 @@ Project options
   --root <dir>        Directory node ids are relative to (default: cwd)
   --tsconfig <file>   tsconfig for compiler options and path aliases
                       (default: <root>/tsconfig.json)
-  --include <glob>    Files to index, repeatable (default: **/*.ts)
+  --include <glob>    Files to index, repeatable (default: **/*.ts and **/*.vue)
   --exclude <glob>    Extra files to skip, repeatable
 
 Diff options

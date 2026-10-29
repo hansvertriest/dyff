@@ -1,8 +1,9 @@
-import { existsSync } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { Project, ts, type SourceFile } from 'ts-morph';
 import type { FileImport, FileInfo, Injection, ModuleImport, ModuleInfo, Provider, SymbolNode } from './schema.js';
 import { collectFile, decoratorArgs, decoratorName, decoratorsOf, findGlobalPrefix, isTestFile, type FileSymbols } from './symbols.js';
+import { isVueFile, vueToTs } from './vue.js';
 
 export interface ProjectOptions {
   /** Directory node ids are relative to. Defaults to the current directory. */
@@ -14,7 +15,7 @@ export interface ProjectOptions {
   exclude?: string[];
 }
 
-export const DEFAULT_INCLUDE = ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'];
+export const DEFAULT_INCLUDE = ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts', '**/*.vue'];
 export const DEFAULT_EXCLUDE = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/*.d.ts'];
 
 /** True when an identifier only appears in a type (annotation, `implements`, generic argument, ...). */
@@ -41,10 +42,14 @@ export class Analyzer {
   readonly project: Project;
   private readonly checker: ts.TypeChecker;
   private readonly symbolCache = new Map<string, FileSymbols>();
+  /** Absolute path of a .vue file's TypeScript view -> project-relative path of the .vue file. */
+  private readonly vueViews = new Map<string, string>();
+  /** Project-relative .vue path -> absolute path of its TypeScript view and the original text. */
+  private readonly vueFiles = new Map<string, { view: string; text: string }>();
 
   constructor(opts: ProjectOptions = {}) {
     this.root = resolve(opts.root ?? process.cwd());
-    const tsconfig = opts.tsconfig ? resolve(opts.tsconfig) : resolve(this.root, 'tsconfig.json');
+    const tsconfig = opts.tsconfig ? resolve(opts.tsconfig) : appTsconfig(resolve(this.root, 'tsconfig.json'));
     this.project = new Project({
       ...(existsSync(tsconfig) ? { tsConfigFilePath: tsconfig } : { compilerOptions: { experimentalDecorators: true, allowJs: false } }),
       skipAddingFilesFromTsConfig: true,
@@ -52,15 +57,32 @@ export class Analyzer {
     });
     const include = opts.include?.length ? opts.include : DEFAULT_INCLUDE;
     const exclude = [...DEFAULT_EXCLUDE, ...(opts.exclude ?? [])];
-    this.project.addSourceFilesAtPaths([
+    const paths = this.project.getFileSystem().globSync([
       ...include.map((g) => resolve(this.root, g)),
       ...exclude.map((g) => '!' + resolve(this.root, g)),
     ]);
+    for (const abs of paths) {
+      if (!isVueFile(abs)) {
+        this.project.addSourceFileAtPath(abs);
+        continue;
+      }
+      // TypeScript resolves `./X.vue` to `./X.vue.ts`, so imports of components find their view.
+      const text = readFileSync(abs, 'utf8');
+      const { ext, code } = vueToTs(text);
+      const view = abs + ext;
+      this.project.createSourceFile(view, code, { overwrite: true });
+      const rel = this.rel(abs);
+      if (!rel) continue;
+      this.vueViews.set(view, rel);
+      this.vueFiles.set(rel, { view, text });
+    }
     this.checker = this.project.getTypeChecker().compilerObject;
   }
 
   /** Project-relative posix path, or undefined for files outside the root or in node_modules. */
   rel(abs: string): string | undefined {
+    const vue = this.vueViews.get(abs);
+    if (vue) return vue;
     const r = relative(this.root, abs);
     if (!r || r.startsWith('..') || r.includes('node_modules')) return undefined;
     return r.split(sep).join('/');
@@ -77,7 +99,12 @@ export class Analyzer {
   }
 
   sourceFile(path: string): SourceFile | undefined {
-    return this.project.getSourceFile(resolve(this.root, path));
+    return this.project.getSourceFile(this.vueFiles.get(path)?.view ?? resolve(this.root, path));
+  }
+
+  /** Source text of a project file as it is on disk (for a .vue file, not its TypeScript view). */
+  text(path: string): string | undefined {
+    return this.vueFiles.get(path)?.text ?? this.sourceFile(path)?.getFullText();
   }
 
   private symbols(sf: ts.SourceFile): FileSymbols | undefined {
@@ -97,6 +124,8 @@ export class Analyzer {
     if (!fs) return undefined;
     let n: ts.Node | undefined = decl;
     if (ts.isVariableDeclaration(n) && fs.byDecl.has(n)) return fs.byDecl.get(n);
+    // `export default { ... }` (e.g. a Vue component's options) stands for the file.
+    if (ts.isExportAssignment(n) && ts.isSourceFile(n.parent)) return fs.byDecl.get(n.parent);
     while (n) {
       const id = fs.byDecl.get(n);
       if (id) return id;
@@ -164,7 +193,16 @@ export class Analyzer {
 
     const visit = (n: ts.Node) => {
       if (ts.isImportDeclaration(n) || ts.isExportDeclaration(n) || ts.isImportEqualsDeclaration(n)) return;
-      if (ts.isIdentifier(n) || ts.isPrivateIdentifier(n)) {
+      const lazy = ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword && n.arguments[0];
+      if (lazy && ts.isStringLiteralLike(lazy)) {
+        // `import('./x')` refers to the module it loads, e.g. a lazily loaded route component.
+        const from = enclosing(n);
+        for (const to of this.targetsOf(lazy)) {
+          if (to === from) continue;
+          uses.get(from)?.add(to);
+          valueUses.add(`${from}|${to}`);
+        }
+      } else if (ts.isIdentifier(n) || ts.isPrivateIdentifier(n)) {
         const parent = n.parent as ts.Node & { name?: ts.Node };
         const isDeclName = parent && parent.name === n && fs.byDecl.has(parent);
         if (!isDeclName) {
@@ -377,4 +415,21 @@ export class Analyzer {
     }
     return out;
   }
+}
+
+/**
+ * A Vite/Vue project's tsconfig.json often only lists references (`"files": []`,
+ * `"references": [{ "path": "./tsconfig.app.json" }]`); the app config holds the
+ * compiler options and path aliases.
+ */
+function appTsconfig(tsconfig: string): string {
+  if (!existsSync(tsconfig)) return tsconfig;
+  const { config } = ts.readConfigFile(tsconfig, ts.sys.readFile);
+  const refs: { path: string }[] = config?.references ?? [];
+  if (!refs.length || !Array.isArray(config.files) || config.files.length) return tsconfig;
+  const candidates = refs
+    .map((r) => resolve(dirname(tsconfig), r.path))
+    .map((p) => (p.endsWith('.json') ? p : resolve(p, 'tsconfig.json')))
+    .filter(existsSync);
+  return candidates.find((p) => /app/.test(p.slice(dirname(p).length))) ?? candidates[0] ?? tsconfig;
 }

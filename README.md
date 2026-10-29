@@ -1,6 +1,6 @@
 # dyff
 
-Turn a NestJS codebase into a JSON graph of modules, files, classes and functions, with each one linked to the exact places it is referenced. Then overlay a pull request on that graph to see what the PR really touches.
+Turn a NestJS or Vue codebase into a JSON graph of modules, files, classes and functions, with each one linked to the exact places it is referenced. Then overlay a pull request on that graph to see what the PR really touches.
 
 For a PR, dyff reports:
 
@@ -12,6 +12,17 @@ For a PR, dyff reports:
 - **test reach**: which spec files reach each changed symbol, and which changed code no test reaches
 
 The analysis uses the TypeScript compiler (via [ts-morph](https://ts-morph.com)), so references are exact: two methods both named `create` are never confused, and path aliases and barrel files are resolved.
+
+## Vue projects
+
+`.vue` single-file components are indexed next to the `.ts` files:
+
+- the `<script>` and `<script setup>` blocks are analyzed with the type checker, so top-level functions and variables become nodes at their real line numbers
+- the template counts as a reference from the component to every component it renders (`<OrderRow>` or `<order-row>`) and every name it uses in bindings, events and `{{ }}`. A change to the template or styles marks the component as modified
+- vue-router route records (`{ path: '/orders/:id', component: ... }`, including `children` and lazy `() => import('./X.vue')`) are entry points, so a changed composable is followed up to the pages that use it: `formatTotal → OrderRow.vue → OrderDetail.vue → PAGE /orders/:id`
+- a Vite `tsconfig.json` that only lists `references` is followed to `tsconfig.app.json` for path aliases such as `@/*`
+
+Options API members (`methods`, `computed`, ...) are not separate nodes: they count as part of the component file.
 
 ## Install
 
@@ -67,7 +78,7 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 | --- | --- |
 | `--root <dir>` | Directory node ids are relative to (default: current directory) |
 | `--tsconfig <file>` | Compiler options and path aliases (default: `<root>/tsconfig.json`) |
-| `--include <glob>` | Files to index, repeatable (default: all `.ts` files under root) |
+| `--include <glob>` | Files to index, repeatable (default: all `.ts` and `.vue` files under root) |
 | `--exclude <glob>` | Extra files to skip, repeatable (`node_modules`, `dist`, `build`, `coverage` and `.d.ts` are always skipped) |
 | `--depth <n>` | How many caller steps to follow for routes and tests (default 8) |
 | `-o, --out <file>` | Write to a file instead of stdout |

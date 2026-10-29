@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { ts } from 'ts-morph';
 import { Analyzer, type FileAnalysis, type ProjectOptions } from './analyzer.js';
 import { deletedText, parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './diff.js';
 import { finalize, moduleAssigner } from './finalize.js';
 import { diffAgainst, headCommit, mergeBase, showFile } from './git.js';
 import { SCHEMA_VERSION, type FileInfo, type Index, type IndexKind, type PrInfo, type SymbolNode } from './schema.js';
 import { collectFile, compactSignature } from './symbols.js';
+import { isVueFile, parseSource } from './vue.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
 
@@ -55,7 +55,7 @@ export interface OverlayOptions extends ProjectOptions {
 }
 
 const TS_FILE = /\.[cm]?tsx?$/;
-const isIndexable = (p: string) => TS_FILE.test(p) && !p.endsWith('.d.ts') && !p.includes('node_modules/');
+const isIndexable = (p: string) => (TS_FILE.test(p) || isVueFile(p)) && !p.endsWith('.d.ts') && !p.includes('node_modules/');
 
 /**
  * Index only the files a PR changed, with the whole branch loaded so references
@@ -95,7 +95,7 @@ export function buildOverlay(opts: OverlayOptions): Index {
     if (df.status === 'added') return undefined;
     if (df.status === 'removed' && df.hunks.length) return deletedText(df.hunks);
     if (df.status !== 'removed') {
-      const cur = a.sourceFile(df.path)?.getFullText().replace(/\r\n/g, '\n');
+      const cur = a.text(df.path)?.replace(/\r\n/g, '\n');
       if (cur !== undefined) {
         const text = reverseApply(cur, df.hunks);
         if (text !== null) return text;
@@ -127,7 +127,7 @@ export function buildOverlay(opts: OverlayOptions): Index {
     const oldNodes = new Map<string, Omit<SymbolNode, 'module' | 'uses' | 'references'>>();
     const oldText = oldTextOf(df);
     if (oldText !== undefined) {
-      const sf = ts.createSourceFile(oldPath, oldText, ts.ScriptTarget.Latest, true);
+      const sf = parseSource(oldPath, oldText);
       for (const { decl: _decl, ...n } of collectFile(sf, oldPath).nodes) {
         const id = oldPath === df.path ? n.id : df.path + n.id.slice(oldPath.length);
         oldNodes.set(id, n);

@@ -19,7 +19,9 @@ export type NodeKind =
   | 'variable'
   | 'interface'
   | 'type'
-  | 'enum';
+  | 'enum'
+  /** A vue-router route record. */
+  | 'route';
 
 export type ChangeStatus = 'added' | 'modified' | 'removed';
 
@@ -52,14 +54,14 @@ export interface Change {
   previousId?: string;
 }
 
-/** An entry point: an HTTP route, message pattern, GraphQL operation, schedule or event handler. */
+/** An entry point: an HTTP route, message pattern, GraphQL operation, schedule, event handler or vue-router page. */
 export interface Route {
-  type: 'http' | 'message' | 'graphql' | 'schedule' | 'event';
-  /** HTTP verb, or the decorator name for other types. */
+  type: 'http' | 'message' | 'graphql' | 'schedule' | 'event' | 'page';
+  /** HTTP verb, the decorator name for other types, or PAGE. */
   verb: string;
   /** Path relative to the controller (http), or the pattern/name. */
   path: string;
-  /** Controller prefix joined with the path (http only; excludes the global prefix). */
+  /** Controller prefix joined with the path (http, excluding the global prefix), or the parent routes' paths joined with it (page). */
   fullPath?: string;
 }
 
