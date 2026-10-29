@@ -52,6 +52,15 @@ export function merge(base: Index, overlay: Index, opts: MergeOptions = {}): Ind
     ],
   };
   if (merged.globalPrefix === undefined) delete merged.globalPrefix;
+  // Keep each changed file's base-side imports, so a viewer can tell which file links the PR added or removed.
+  const baseFiles = new Map(base.files.map((f) => [f.path, f]));
+  const renamedFile = new Map(pr.renamedFiles.map((r) => [r.from, r.to]));
+  for (const f of merged.files) {
+    if (!f.change) continue;
+    const old = baseFiles.get(f.change.oldPath ?? f.path);
+    if (!old) continue;
+    f.change.previousImports = clone(old.imports).map((im) => (im.resolved ? { ...im, resolved: renamedFile.get(im.resolved) ?? im.resolved } : im));
+  }
   for (const m of merged.modules)
     for (const im of m.imports) if (im.classId) im.classId = remap(im.classId);
   finalize(merged);

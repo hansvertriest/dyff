@@ -199,6 +199,17 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.ok(merged.checks.untested.includes('src/users/users.service.ts#UsersService.findByEmail'));
   });
 
+  it('keeps the base-side imports of changed files', () => {
+    const file = (p) => merged.files.find((f) => f.path === p);
+    const resolved = (imports) => imports.map((i) => i.resolved).filter(Boolean);
+    const app = file('src/app.module.ts');
+    assert.ok(resolved(app.imports).includes('src/auth/auth.module.ts'));
+    assert.ok(!resolved(app.change.previousImports).includes('src/auth/auth.module.ts'));
+    assert.deepEqual(file('src/orders/orders.repository.ts').change.previousImports, []);
+    assert.equal(file('src/auth/auth.module.ts').change.previousImports, undefined);
+    assert.equal(file('src/reports/reports.service.ts').change, undefined);
+  });
+
   it('keeps unchanged nodes from the base and recomputes references', () => {
     const findByEmail = node(merged, 'src/users/users.service.ts#UsersService.findByEmail');
     assert.deepEqual(findByEmail.references, ['src/auth/auth.service.ts#AuthService.validateUser']);

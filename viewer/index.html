@@ -82,6 +82,9 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .node.affected .bar{fill:var(--accent)}
 .node .nm{font:600 14px var(--sans);fill:var(--ink)}
 .node .pth{font:12px var(--mono);fill:var(--muted)}
+.node.ext rect.box{fill:none;stroke-dasharray:2 3}
+.crumbs{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);width:100%}
+.crumbs b{color:var(--ink);font-weight:600}
 .node .meta{font:500 12px var(--sans);fill:var(--muted)}
 .node .meta .a{fill:var(--add)} .node .meta .d{fill:var(--del)} .node .meta .w{fill:var(--del)}
 .node:focus{outline:none}
@@ -224,6 +227,7 @@ details.file>summary.fhead:hover{background:var(--line)}
 <main>
   <section class="stage" aria-label="Module graph">
     <div class="stagebar">
+      <nav class="crumbs" id="crumbs" aria-label="Map level" hidden></nav>
       <label class="toggle" id="allWrap"><input type="checkbox" id="showAll"> Show all modules</label>
       <label class="toggle"><input type="checkbox" id="showLinks"> Show all links</label>
       <label class="toggle"><input type="checkbox" id="showCycles"> Show existing cycles</label>
@@ -254,12 +258,15 @@ const baseOf = p => p.slice(p.lastIndexOf('/') + 1);
 const short = id => id.includes('#') ? id.slice(id.indexOf('#') + 1) : baseOf(id);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-let D, byId, modById, fileByPath, M;
+let D, byId, modById, fileByPath, nodesByFile, M, FG, zoom = null;
 let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, history = [];
 
 /* ---------- Model ---------- */
 function build() {
   byId = new Map(D.nodes.map(n => [n.id, n]));
+  nodesByFile = new Map();
+  for (const n of D.nodes) { if (!nodesByFile.has(n.file)) nodesByFile.set(n.file, []); nodesByFile.get(n.file).push(n); }
+  FG = null;
   modById = new Map(D.modules.map(m => [m.id, m]));
   fileByPath = new Map(D.files.map(f => [f.path, f]));
   const C = D.checks;
@@ -299,20 +306,79 @@ function build() {
   M = { nodes, edges };
 }
 
+/* ---------- Files inside a module ---------- */
+// One box per file of the module, and one per other module its files import or are imported by.
+const fileKey = f => f.module === zoom ? f.path : 'mod:' + f.module;
+function fileGraph(mod) {
+  const nodes = new Map(), edges = new Map();
+  const shown = f => f && (showTests || !f.test);
+  const warns = new Map();
+  for (const d of D.checks.danglingReferences) { const f = byId.get(d.from)?.file; if (f) warns.set(f, (warns.get(f) || 0) + 1); }
+  for (const f of D.files) {
+    if (f.module !== mod || !shown(f)) continue;
+    const ch = f.change, dir = dirOf(f.path);
+    const usesChanged = !ch && (nodesByFile.get(f.path) || []).some(n => n.uses.some(u => byId.get(u)?.change));
+    nodes.set(f.path, { id: f.path, name: baseOf(f.path), sub: dir.startsWith(mod + '/') ? dir.slice(mod.length + 1) + '/' : dir + '/', file: f,
+      changed: !!ch, state: !ch ? 'none' : ch.status === 'added' || ch.status === 'removed' ? ch.status : 'modified',
+      affected: usesChanged, adds: ch?.additions || 0, dels: ch?.deletions || 0, warn: warns.get(f.path) || 0, out: new Map(), inn: new Set() });
+  }
+  const ext = m => {
+    const k = 'mod:' + m;
+    if (!nodes.has(k)) nodes.set(k, { id: k, ext: true, mod: m, name: modName(m), sub: m, changed: false, state: 'none', affected: false, adds: 0, dels: 0, warn: 0, out: new Map(), inn: new Set() });
+    return k;
+  };
+  const add = (from, to, side, im) => {
+    const k = from + '>' + to;
+    let e = edges.get(k);
+    if (!e) edges.set(k, e = { from, to, now: false, before: false, unknown: false, typeOnly: true, cycle: false });
+    e[side] = true; if (!im.typeOnly) e.typeOnly = false;
+  };
+  for (const f of D.files) {
+    if (!shown(f)) continue;
+    const ch = f.change;
+    // Before-side imports: unchanged files have the same imports; an index without previousImports can't tell.
+    const before = !ch ? f.imports : ch.status === 'added' ? [] : ch.previousImports;
+    const sides = [['now', ch?.status === 'removed' ? [] : f.imports], ['before', before || []]];
+    for (const [side, list] of sides) for (const im of list) {
+      const t = fileByPath.get(im.resolved);
+      if (!shown(t) || (f.module !== mod && t.module !== mod)) continue;
+      const a = f.module === mod ? f.path : ext(f.module), b = t.module === mod ? t.path : ext(t.module);
+      if (a === b) continue;
+      add(a, b, side, im);
+      if (!before) edges.get(a + '>' + b).unknown = true;
+    }
+  }
+  for (const e of edges.values()) {
+    e.changed = e.now && !e.before && !e.unknown;
+    e.removed = e.before && !e.now && !e.unknown;
+    // Still imports a file this PR deletes: shown like a PR link, it is what breaks.
+    e.broken = e.now && nodes.get(e.to).state === 'removed';
+    nodes.get(e.from).out.set(e.to, e); nodes.get(e.to).inn.add(e.from);
+    if (e.changed || e.removed || e.broken) { nodes.get(e.from).prLink = true; nodes.get(e.to).prLink = true; }
+  }
+  return { files: true, mod, tests: showTests, nodes, edges };
+}
+const graph = () => !zoom ? M : FG && FG.mod === zoom && FG.tests === showTests ? FG : (FG = fileGraph(zoom));
+
 /* ---------- Graph ---------- */
 const W = 232, H = 78, CG = 92, RG = 22, PAD = 28;
 function visibleIds() {
-  const ids = new Set();
-  for (const n of M.nodes.values()) if (n.changed) ids.add(n.id);
-  if (showAll || !ids.size) for (const n of M.nodes.values()) ids.add(n.id);
-  else for (const id of [...ids]) { const n = M.nodes.get(id); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
-  if (selected && M.nodes.has(selected)) ids.add(selected);
+  const G = graph(), ids = new Set();
+  if (G.files) {
+    // Every file of the module; other modules only when the PR changed a link to them.
+    for (const n of G.nodes.values()) if (!n.ext || showAll || n.prLink) ids.add(n.id);
+  } else {
+    for (const n of G.nodes.values()) if (n.changed) ids.add(n.id);
+    if (showAll || !ids.size) for (const n of G.nodes.values()) ids.add(n.id);
+    else for (const id of [...ids]) { const n = G.nodes.get(id); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
+  }
+  if (selected && G.nodes.has(selected)) { ids.add(selected); if (G.files) { const n = G.nodes.get(selected); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); } }
   for (const id of hot) ids.add(id);
-  return [...ids].filter(id => M.nodes.has(id));
+  return [...ids].filter(id => G.nodes.has(id));
 }
 function layout(ids) {
-  const set = new Set(ids), h = new Map();
-  const outs = id => [...M.nodes.get(id).out.keys()].filter(t => set.has(t));
+  const G = graph(), set = new Set(ids), h = new Map();
+  const outs = id => [...G.nodes.get(id).out.keys()].filter(t => set.has(t));
   const visit = (id, stack) => {
     if (h.has(id)) return h.get(id); if (stack.has(id)) return 0;
     stack.add(id); let d = 0; for (const t of outs(id)) d = Math.max(d, visit(t, stack) + 1); stack.delete(id);
@@ -324,8 +390,8 @@ function layout(ids) {
   const row = new Map(), pos = new Map();
   cols.forEach(col => {
     if (!col) return;
-    const score = id => { const ps = [...M.nodes.get(id).inn].filter(p => row.has(p)); return ps.length ? ps.reduce((a, p) => a + row.get(p), 0) / ps.length : 1e3; };
-    col.sort((a, b) => score(a) - score(b) || (M.nodes.get(b).changed - M.nodes.get(a).changed) || M.nodes.get(a).name.localeCompare(M.nodes.get(b).name));
+    const score = id => { const ps = [...G.nodes.get(id).inn].filter(p => row.has(p)); return ps.length ? ps.reduce((a, p) => a + row.get(p), 0) / ps.length : 1e3; };
+    col.sort((a, b) => score(a) - score(b) || (G.nodes.get(b).changed - G.nodes.get(a).changed) || G.nodes.get(a).name.localeCompare(G.nodes.get(b).name));
     col.forEach((id, ri) => row.set(id, ri));
   });
   const maxRows = Math.max(1, ...cols.map(c => c ? c.length : 0));
@@ -344,13 +410,15 @@ let hot = new Set(), hoverMod = null;
 function renderGraph() {
   const cv = $('#canvas');
   hoverMod = null;
+  const G = graph();
+  renderCrumbs();
   const ids = visibleIds();
-  if (!ids.length) { cv.innerHTML = '<p class="empty">No modules.</p>'; return; }
+  if (!ids.length) { cv.innerHTML = `<p class="empty">${G.files ? 'No files.' : 'No modules.'}</p>`; return; }
   const L = layout(ids), { pos, col, bottom, width } = L;
   let height = L.height;
   const set = new Set(ids);
-  const focus = selected && M.nodes.has(selected) ? new Set([selected, ...M.nodes.get(selected).out.keys(), ...M.nodes.get(selected).inn]) : hot.size ? hot : null;
-  const vis = [...M.edges.values()].filter(e => set.has(e.from) && set.has(e.to));
+  const focus = selected && G.nodes.has(selected) ? new Set([selected, ...G.nodes.get(selected).out.keys(), ...G.nodes.get(selected).inn]) : hot.size ? hot : null;
+  const vis = [...G.edges.values()].filter(e => set.has(e.from) && set.has(e.to));
   const op = new Map(), ip = new Map();
   const spread = (list, map) => { const k = list.length; list.forEach((e, i) => map.set(e, k < 2 ? 0 : (i - (k - 1) / 2) * Math.min(12, 44 / (k - 1)))); };
   for (const id of ids) {
@@ -373,30 +441,40 @@ function renderGraph() {
     const dim = focus && !near;
     // Links the PR didn't change only show around the selected or hovered module, and an existing
     // cycle is only colored there too: on a big PR they would otherwise cover the whole map.
-    const shown = showLinks || near || e.changed || e.removed || e.cycle === 'new';
+    const shown = showLinks || near || e.changed || e.removed || e.broken || e.cycle === 'new';
     const cyc = e.cycle === 'new' ? 'new' : e.cycle && (showCycles || near) ? 'old' : false;
-    const cls = ['edge', e.removed ? 'rem' : cyc === 'new' ? 'cyc-new' : cyc ? 'cyc' : e.changed ? 'chg' : '', !e.kinds.has('module-import') ? 'imp' : '', dim ? 'dim' : '', shown ? '' : 'ctx'].join(' ');
+    const cls = ['edge', e.removed ? 'rem' : cyc === 'new' ? 'cyc-new' : cyc ? 'cyc' : e.changed ? 'chg' : '', (G.files ? e.typeOnly : !e.kinds.has('module-import')) ? 'imp' : '', dim ? 'dim' : '', shown ? '' : 'ctx'].join(' ');
     const mk = e.removed ? 'mr' : cyc === 'new' ? 'mx' : cyc ? 'mp' : e.changed ? 'mc' : 'mn';
-    const title = `${M.nodes.get(e.from).name} → ${M.nodes.get(e.to).name}\n${e.kinds.has('module-import') ? '@Module import' : 'File import only'}${e.forwardRef ? ' (forwardRef)' : ''}${e.cycle === 'new' ? '\nPart of a circular dependency this PR creates' : e.cycle ? '\nPart of a circular dependency that already existed' : ''}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : ''}`;
+    const title = G.files ? `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${e.typeOnly ? 'Type-only import' : 'Import'}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : e.broken ? '\nStill imports a file this PR removes' : ''}`
+      : `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${e.kinds.has('module-import') ? '@Module import' : 'File import only'}${e.forwardRef ? ' (forwardRef)' : ''}${e.cycle === 'new' ? '\nPart of a circular dependency this PR creates' : e.cycle ? '\nPart of a circular dependency that already existed' : ''}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : ''}`;
     eh += `<path class="${cls}" data-a="${esc(e.from)}" data-b="${esc(e.to)}" d="${d}" marker-end="url(#${mk})"><title>${esc(title)}</title></path>`;
   }
   let nh = '';
   for (const id of ids) {
-    const n = M.nodes.get(id), p = pos.get(id);
-    const cls = ['node', 's-' + n.state, n.affected ? 'affected' : '', !n.changed && !n.affected ? 'context' : '', id === selected ? 'sel' : '', hot.has(id) && id !== selected ? 'hot' : '', focus && !focus.has(id) ? 'dim' : ''].join(' ');
-    const meta = n.changed
-      ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${plural(n.files.length, 'file')}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
+    const n = G.nodes.get(id), p = pos.get(id);
+    const cls = ['node', 's-' + n.state, n.ext ? 'ext' : '', n.affected ? 'affected' : '', !n.changed && !n.affected ? 'context' : '', id === selected ? 'sel' : '', hot.has(id) && id !== selected ? 'hot' : '', focus && !focus.has(id) ? 'dim' : ''].join(' ');
+    const meta = n.ext ? 'Other module'
+      : n.changed
+      ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${n.file ? statusWord(n.file.change.status) : plural(n.files.length, 'file')}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
       : n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? 'Uses changed code' : 'Unchanged';
-    nh += `<g class="${cls}" data-mod="${esc(id)}" tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
+    const target = n.file ? `data-sym="${esc(id)}"` : `data-mod="${esc(n.ext ? n.mod : id)}"`;
+    nh += `<g class="${cls}" data-k="${esc(id)}" ${target} tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
       <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
       <text class="nm" x="18" y="25">${esc(clip(n.name, 25))}</text>
-      <text class="pth" x="18" y="44">${esc(clip(n.id, 29))}</text>
-      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.name + '\n' + n.id)}</title></g>`;
+      <text class="pth" x="18" y="44">${esc(clip(n.sub ?? n.id, 29))}</text>
+      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.name + '\n' + (n.file ? n.file.path : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
-  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" style="width:100%;max-width:${vw}px;min-width:${Math.round(vw * 0.62)}px" role="img" aria-label="Modules touched by this pull request">
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" style="width:100%;max-width:${vw}px;min-width:${Math.round(vw * 0.62)}px" role="img" aria-label="${G.files ? `Files in ${esc(modName(zoom))}` : 'Modules touched by this pull request'}">
     <defs>${['mn', 'mc', 'mr', 'mp', 'mx'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r', 'mk-p', 'mk-x'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
     ${eh}${nh}</svg>`;
+}
+
+function renderCrumbs() {
+  const c = $('#crumbs');
+  c.hidden = !zoom;
+  if (zoom) c.innerHTML = `<button class="linkbtn" data-action="unzoom">All modules</button><span>›</span><b>${esc(modName(zoom))}</b><span>· files</span>`;
+  $('#allWrap').lastChild.textContent = zoom ? ' Show all connected modules' : ' Show all modules';
 }
 
 /* ---------- Panel helpers ---------- */
@@ -519,6 +597,7 @@ function renderModule(id) {
     <button class="back" data-action="back">← Back</button>
     <h2>${esc(n.name)}</h2><p class="path">${esc(m.file || n.id)}</p>
     <p class="lead">${esc(why)}</p>${declHtml}
+    ${zoom === id ? '' : `<p><button class="linkbtn" data-action="zoom" data-zoom="${esc(id)}">Show its files in the map →</button></p>`}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => symBtn(d.from, ` · uses removed ${esc(symLabel(d.to))}`)).join('')}</div>` : ''}
     ${outs.length ? `<h3>Depends on</h3><div class="chips">${outs.map(e => chip(e, e.to)).join('')}</div>` : ''}
     ${ins.length ? `<h3>Used by</h3><div class="chips">${ins.map(e => chip(e, e.from)).join('')}</div>` : ''}
@@ -549,6 +628,8 @@ function renderSymbol(id) {
   const broken = C.danglingReferences.filter(d => d.from === id || d.to === id);
   const typeOnly = new Set(n.typeUses || []);
   const children = D.nodes.filter(c => c.parent === id);
+  // A whole file gets the same breakdown as in a module: imports and top of file, then each changed symbol.
+  const file = n.kind === 'file' ? fileByPath.get(n.file) : null;
   $('#pin').innerHTML = `
     <button class="back" data-action="back">← Back</button>
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
@@ -557,7 +638,7 @@ function renderSymbol(id) {
     ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
-    ${ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks)}` : ''}
+    ${file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
     ${tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : ''}
     ${n.injects ? `<h3>Injects</h3><div class="refs">${n.injects.map(i => i.target ? symBtn(i.target, ` · ${esc(i.param)}${i.kind !== 'class' ? ' via ' + esc(i.decorator || 'token') + ' ' + esc(tokenLabel(i.token)) : ''}`) : `<button disabled>${esc(i.param)} <small>${esc(tokenLabel(i.token))}</small></button>`).join('')}</div>` : ''}
@@ -573,9 +654,15 @@ let view = { type: 'summary' };
 function go(next, push = true) {
   if (push) history.push(view);
   view = next;
-  selected = view.type === 'module' ? view.id : null;
+  zoom = view.zoom && M.nodes.has(view.zoom) ? view.zoom : null;
+  selected = !zoom && view.type === 'module' ? view.id : null;
   hot = new Set();
-  if (view.type === 'symbol') {
+  const sym = view.type === 'symbol' ? byId.get(view.id) : null;
+  if (zoom && sym) {
+    // In the file view a file is selected; a symbol inside a file lights up the files it is used from and uses.
+    if (sym.kind === 'file') selected = sym.file;
+    else for (const x of [sym.id, ...sym.references, ...sym.uses]) { const f = fileByPath.get(byId.get(x)?.file); if (f) hot.add(fileKey(f)); }
+  } else if (view.type === 'symbol') {
     const n = byId.get(view.id);
     if (n) { hot.add(n.module); for (const r of n.references) hot.add(byId.get(r)?.module); for (const u of n.uses) hot.add(byId.get(u)?.module); hot.delete(undefined); }
   }
@@ -592,10 +679,24 @@ document.addEventListener('click', e => {
   if (!b || b.disabled) return;
   if (b.closest('#results')) { $('#results').hidden = true; $('#q').value = ''; }
   if (b.dataset.action === 'back') back();
+  else if (b.dataset.action === 'zoom') go({ type: 'module', id: b.dataset.zoom, zoom: b.dataset.zoom });
+  else if (b.dataset.action === 'unzoom') go({ type: 'module', id: zoom });
+  else if (zoom && b.dataset.sym) {
+    // A symbol from another module opens that module's files.
+    const z = fileByPath.get(byId.get(b.dataset.sym)?.file)?.module || zoom;
+    go(b.closest('.node') && selected === b.dataset.sym ? { type: 'module', id: zoom, zoom } : { type: 'symbol', id: b.dataset.sym, zoom: z });
+  }
+  // In the file view another module opens its own files.
+  else if (zoom && b.dataset.mod) go({ type: 'module', id: b.dataset.mod, zoom: b.dataset.mod });
   else if (b.dataset.sym) go({ type: 'symbol', id: b.dataset.sym });
   else if (b.dataset.mod) go(selected === b.dataset.mod ? { type: 'summary' } : { type: 'module', id: b.dataset.mod });
 });
-$('#canvas').addEventListener('click', e => { if (!e.target.closest('.node') && view.type !== 'summary') go({ type: 'summary' }); });
+$('#canvas').addEventListener('click', e => {
+  if (e.target.closest('.node')) return;
+  if (zoom) { if (view.type !== 'module' || view.id !== zoom) go({ type: 'module', id: zoom, zoom }); }
+  else if (view.type !== 'summary') go({ type: 'summary' });
+});
+$('#canvas').addEventListener('dblclick', e => { const g = e.target.closest('.node[data-mod]'); if (g && !zoom) go({ type: 'module', id: g.dataset.mod, zoom: g.dataset.mod }); });
 $('#canvas').addEventListener('keydown', e => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); g.dispatchEvent(new MouseEvent('click', { bubbles: true })); } });
 $('#showAll').addEventListener('change', e => { showAll = e.target.checked; renderGraph(); });
 $('#showLinks').addEventListener('change', e => { showLinks = e.target.checked; renderGraph(); });
@@ -605,9 +706,9 @@ const hoverLinks = id => {
   hoverMod = id;
   for (const p of $('#canvas').querySelectorAll('.edge.ctx')) p.classList.toggle('on', !!id && (p.dataset.a === id || p.dataset.b === id));
 };
-$('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.node')?.dataset.mod ?? null));
+$('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#canvas').addEventListener('mouseleave', () => hoverLinks(null));
-$('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.mod ?? null));
+$('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && view.type !== 'summary' && document.activeElement !== $('#q')) back(); });
 

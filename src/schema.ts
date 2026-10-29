@@ -170,6 +170,8 @@ export interface FileInfo {
     additions: number;
     deletions: number;
     hunks: Hunk[];
+    /** Imports on the base side, with renamed paths mapped to their new path. Only in a merged index; absent for added files. */
+    previousImports?: FileImport[];
   };
 }
 
