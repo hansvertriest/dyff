@@ -65,8 +65,21 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .legend span{display:inline-flex;align-items:center;gap:5px}
 .legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
 .toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
-.canvas{flex:1;min-height:0;overflow:auto;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
-.canvas svg{display:block;height:auto}
+.canvas{flex:1;min-height:0;position:relative;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
+.canvas.panning{cursor:grabbing}
+.canvas svg{display:block;position:absolute;left:0;top:0;transform-origin:0 0}
+.opts{display:contents}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:36px;height:36px;padding:0 9px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
+.iconbtn:hover{border-color:var(--edge)}
+.iconbtn svg{flex:none}
+.mobile-only{display:none !important}
+.zoomctl{position:absolute;right:14px;bottom:14px;z-index:4;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 4px 14px rgba(15,20,30,.12);overflow:hidden}
+.zoomctl button{width:38px;height:38px;border:0;background:none;display:flex;align-items:center;justify-content:center;font:500 18px var(--sans);color:var(--ink)}
+.zoomctl button+button{border-top:1px solid var(--line)}
+.zoomctl button:hover{background:var(--surface-2)}
+.fab{position:absolute;left:50%;bottom:calc(16px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:4;display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 18px;border:0;border-radius:999px;background:var(--accent);color:var(--surface);font-weight:600;box-shadow:0 6px 20px rgba(15,20,30,.25);max-width:calc(100% - 140px)}
+.fab span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sheethead{display:none}
 
 .node{cursor:pointer}
 .node rect.box{fill:var(--surface);stroke:var(--line);stroke-width:1}
@@ -220,15 +233,45 @@ details.file>summary.fhead:hover{background:var(--line)}
 .crow .main{flex:1;min-width:0}
 .crow .cbody{font-size:13px;margin:2px 0 0}
 
+/* Phones and narrow tablets: the map fills the screen, the details open as a bottom sheet. */
 @media (max-width: 960px){
-  body{height:auto;min-height:100%}
-  main{display:block}
-  .stage{height:62vh;min-height:360px}
-  .panel{border-left:0;border-top:1px solid var(--line);overflow:visible}
-  .top{padding:12px 16px}
-  .stagebar{padding:10px 16px 0}
-  .pin{padding:18px 16px 36px}
-  .search{flex:1 1 100%}
+  body{height:100vh;height:100dvh;overflow:hidden}
+  .mobile-only{display:inline-flex !important}
+  .top{flex-wrap:nowrap;gap:8px;padding:6px 10px 6px 14px;padding-top:max(6px, env(safe-area-inset-top))}
+  .brand{font-size:15px;gap:7px}
+  .brand svg{width:18px;height:18px}
+  .prtitle{flex:1 1 auto;font-size:13px}
+  .prtitle small{display:none}
+  .search{display:none}
+  .top.searching>:not(.search){display:none !important}
+  .top.searching .search{display:flex;gap:8px;flex:1 1 auto;min-width:0}
+  .top.searching .search input{flex:1;min-width:0;height:36px}
+  .hbtn{height:36px;display:inline-flex;align-items:center;gap:6px;padding:0 10px}
+  .hbtn .lbl{font-variant-numeric:tabular-nums}
+  main{display:block;position:relative}
+  .stage{position:absolute;inset:0}
+  .stagebar{position:absolute;top:8px;left:8px;right:8px;z-index:5;padding:0;flex-wrap:nowrap;align-items:flex-start;pointer-events:none}
+  .stagebar>*{pointer-events:auto}
+  .crumbs{width:auto;flex:0 1 auto;min-width:0;height:36px;padding:0 12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;white-space:nowrap;overflow:hidden}
+  .crumbs b{overflow:hidden;text-overflow:ellipsis}
+  #optsBtn{margin-left:auto}
+  .opts{display:none}
+  .stagebar.open .opts{display:flex;flex-direction:column;align-items:flex-start;gap:10px;position:absolute;top:44px;right:0;width:min(300px, calc(100vw - 16px));max-height:calc(100% - 60px);overflow:auto;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(15,20,30,.16)}
+  .stagebar.open #optsBtn{border-color:var(--accent);color:var(--accent)}
+  .opts .legend{flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--line);width:100%}
+  .toggle{font-size:14px;min-height:28px}
+  .zoomctl{bottom:calc(16px + env(safe-area-inset-bottom))}
+  .panel{position:fixed;left:0;right:0;bottom:0;z-index:30;height:58vh;height:58dvh;border:1px solid var(--line);border-bottom:0;border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(15,20,30,.2);overscroll-behavior:contain;transform:translateY(105%);visibility:hidden;transition:transform .24s ease,height .24s ease,visibility 0s linear .24s}
+  .panel.open{transform:none;visibility:visible;transition:transform .24s ease,height .24s ease}
+  .panel.full{height:calc(100vh - 10px);height:calc(100dvh - 10px)}
+  .panel.dragging{transition:none}
+  .sheethead{display:flex;align-items:center;justify-content:flex-end;position:sticky;top:0;z-index:2;height:44px;padding:0 8px;background:var(--surface)}
+  .grip{position:absolute;left:50%;top:0;transform:translateX(-50%);width:120px;height:44px;border:0;background:none;touch-action:none;cursor:grab}
+  .grip i{display:block;width:40px;height:5px;margin:0 auto;border-radius:3px;background:var(--line)}
+  #sheetClose{border:0;background:none}
+  .pin{padding:0 16px calc(36px + env(safe-area-inset-bottom))}
+  body.sheet-open .fab{display:none !important}
+  @media (prefers-reduced-motion: reduce){.panel,.panel.open{transition:none}}
 }
 </style>
 </head>
@@ -242,13 +285,17 @@ details.file>summary.fhead:hover{background:var(--line)}
   <div class="search">
     <input id="q" type="search" placeholder="Find a class, method or route…" autocomplete="off" spellcheck="false" aria-label="Find a symbol">
     <div class="results" id="results" hidden></div>
+    <button class="iconbtn mobile-only" id="searchClose" type="button" aria-label="Close search"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
   </div>
-  <button class="hbtn" id="dlReview" type="button" hidden title="A GitHub pull request review, with each comment's line of code and symbol for context">Download comments</button>
+  <button class="hbtn" id="dlReview" type="button" hidden title="A GitHub pull request review, with each comment's line of code and symbol for context"><svg class="mobile-only" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L4.5 6.5M8 10l3.5-3.5M3 13h10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Download comments</span></button>
+  <button class="iconbtn mobile-only" id="searchBtn" type="button" aria-label="Search"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" stroke="currentColor" stroke-width="1.7" fill="none"/><path d="M11.5 11.5L16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
 </header>
 <main>
   <section class="stage" aria-label="Module graph">
     <div class="stagebar">
       <nav class="crumbs" id="crumbs" aria-label="Map level" hidden></nav>
+      <button class="iconbtn mobile-only" id="optsBtn" type="button" aria-expanded="false" aria-controls="opts" aria-label="Map options"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h8m4 0h2M2 13h2m4 0h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="5" r="2" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="6" cy="13" r="2" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></button>
+      <div class="opts" id="opts">
       <label class="toggle" id="allWrap"><input type="checkbox" id="showAll"> Show all modules</label>
       <label class="toggle"><input type="checkbox" id="showLinks"> Show all links</label>
       <label class="toggle"><input type="checkbox" id="showCycles"> Show existing cycles</label>
@@ -263,10 +310,20 @@ details.file>summary.fhead:hover{background:var(--line)}
         <span><b style="color:var(--l-cyc-new);border-top-width:3px"></b>New cycle</span>
         <span><b style="color:var(--l-cyc)"></b>Existing cycle</span>
       </div>
+      </div>
     </div>
     <div class="canvas" id="canvas"></div>
+    <div class="zoomctl" role="group" aria-label="Zoom">
+      <button type="button" data-z="in" aria-label="Zoom in" title="Zoom in">+</button>
+      <button type="button" data-z="out" aria-label="Zoom out" title="Zoom out">−</button>
+      <button type="button" data-z="fit" aria-label="Fit the map to the screen" title="Fit to screen"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
+    <button class="fab mobile-only" id="sheetBtn" type="button" aria-controls="panel"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span id="sheetLbl">Summary</span></button>
   </section>
-  <aside class="panel" id="panel" aria-label="Details"><div class="pin" id="pin"><p class="empty">Loading…</p></div></aside>
+  <aside class="panel" id="panel" aria-label="Details">
+    <div class="sheethead"><button class="grip" id="grip" type="button" aria-label="Expand or collapse the details"><i></i></button><button class="iconbtn" id="sheetClose" type="button" aria-label="Close details"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button></div>
+    <div class="pin" id="pin"><p class="empty">Loading…</p></div>
+  </aside>
 </main>
 
 <script>
@@ -486,9 +543,122 @@ function renderGraph() {
       <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.name + '\n' + (n.file ? n.file.path : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
-  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" style="width:100%;max-width:${vw}px;min-width:${Math.round(vw * 0.62)}px" role="img" aria-label="${G.files ? `Files in ${esc(modName(zoom))}` : 'Modules touched by this pull request'}">
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="${G.files ? `Files in ${esc(modName(zoom))}` : 'Modules touched by this pull request'}">
     <defs>${['mn', 'mc', 'mr', 'mp', 'mx'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r', 'mk-p', 'mk-x'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
     ${eh}${nh}</svg>`;
+  cam.w = vw; cam.h = height;
+  const key = `${zoom || ''}|${vw}x${height}`;
+  if (key !== cam.key) { cam.key = key; fitCam(); }
+  else { clampCam(); applyCam(); }
+}
+
+/* ---------- Pan and zoom ---------- */
+// The map is drawn at its natural size and moved with a transform: drag or scroll to pan,
+// pinch or ctrl/⌘ + scroll to zoom. A new graph (another level, other modules shown) is fitted to the screen.
+const cam = { s: 1, x: 0, y: 0, w: 0, h: 0, key: '', fitted: true };
+const MIN_S = 0.15, MAX_S = 3;
+const isMobile = () => window.matchMedia('(max-width: 960px)').matches;
+/** Parts of the canvas covered by the floating controls on phones. */
+const insets = () => isMobile() ? { top: 52, bottom: 72 } : { top: 0, bottom: 0 };
+function applyCam() {
+  const cv = $('#canvas'), svg = cv.querySelector('svg');
+  if (svg) svg.style.transform = `translate(${cam.x}px,${cam.y}px) scale(${cam.s})`;
+  cv.style.backgroundSize = `${22 * cam.s}px ${22 * cam.s}px`;
+  cv.style.backgroundPosition = `${cam.x}px ${cam.y}px`;
+}
+function clampCam() {
+  // Keep at least a corner of the map on screen.
+  const cv = $('#canvas'), m = 80, w = cam.w * cam.s, h = cam.h * cam.s;
+  cam.x = Math.min(Math.max(cam.x, m - w), cv.clientWidth - m);
+  cam.y = Math.min(Math.max(cam.y, m - h), cv.clientHeight - m);
+}
+function fitCam() {
+  const cv = $('#canvas'), { top, bottom } = insets();
+  const cw = cv.clientWidth, ch = Math.max(100, cv.clientHeight - top - bottom);
+  if (!cw || !cam.w) return;
+  cam.s = Math.max(MIN_S, Math.min(1, cw / cam.w, ch / cam.h));
+  cam.x = Math.max(0, (cw - cam.w * cam.s) / 2);
+  cam.y = top + Math.max(0, (ch - cam.h * cam.s) / 2);
+  cam.fitted = true;
+  applyCam();
+}
+function zoomAt(f, px, py) {
+  const s = Math.min(MAX_S, Math.max(MIN_S, cam.s * f)), k = s / cam.s;
+  cam.x = px - (px - cam.x) * k;
+  cam.y = py - (py - cam.y) * k;
+  cam.s = s;
+  cam.fitted = false;
+  clampCam();
+  applyCam();
+}
+function panBy(dx, dy) {
+  cam.x += dx; cam.y += dy; cam.fitted = false;
+  clampCam();
+  applyCam();
+}
+{
+  const cv = $('#canvas'), pts = new Map();
+  let last = null, moved = 0, dragged = false;
+  const local = (x, y) => { const r = cv.getBoundingClientRect(); return [x - r.left, y - r.top]; };
+  const summary = () => {
+    const ps = [...pts.values()];
+    if (ps.length === 1) return { x: ps[0].x, y: ps[0].y, d: 0 };
+    return { x: (ps[0].x + ps[1].x) / 2, y: (ps[0].y + ps[1].y) / 2, d: Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) };
+  };
+  cv.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (!pts.size) { moved = 0; dragged = false; }
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    last = summary();
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const now = summary();
+    if (pts.size === 1) moved += Math.hypot(now.x - last.x, now.y - last.y);
+    // Capture only once it is a drag, so a tap still clicks the node under it.
+    if (!dragged && (moved > 6 || pts.size > 1)) {
+      dragged = true;
+      cv.classList.add('panning');
+      for (const id of pts.keys()) try { cv.setPointerCapture(id); } catch { /* pointer gone */ }
+    }
+    if (dragged) {
+      if (pts.size > 1 && last.d) { const [px, py] = local(now.x, now.y); zoomAt(now.d / last.d, px, py); }
+      panBy(now.x - last.x, now.y - last.y);
+    }
+    last = now;
+  });
+  const up = e => {
+    pts.delete(e.pointerId);
+    last = pts.size ? summary() : null;
+    if (!pts.size) cv.classList.remove('panning');
+  };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  // A drag that ends on a node or the background is not a click.
+  cv.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? cv.clientHeight : 1;
+    if (e.ctrlKey || e.metaKey) { const [px, py] = local(e.clientX, e.clientY); zoomAt(Math.exp(-e.deltaY * k * 0.01), px, py); }
+    else panBy(-e.deltaX * k, -e.deltaY * k);
+  }, { passive: false });
+  // Safari's trackpad pinch (touch pinches arrive as pointers).
+  let gs = 1;
+  cv.addEventListener('gesturestart', e => { e.preventDefault(); gs = 1; });
+  cv.addEventListener('gesturechange', e => {
+    e.preventDefault();
+    if (pts.size) return;
+    const [px, py] = local(e.clientX, e.clientY);
+    zoomAt(e.scale / gs, px, py); gs = e.scale;
+  });
+  $('.zoomctl').addEventListener('click', e => {
+    const z = e.target.closest('[data-z]')?.dataset.z;
+    if (z === 'fit') fitCam();
+    else if (z) zoomAt(z === 'in' ? 1.3 : 1 / 1.3, cv.clientWidth / 2, cv.clientHeight / 2);
+  });
+  let rs;
+  window.addEventListener('resize', () => { clearTimeout(rs); rs = setTimeout(() => { if (cam.fitted) fitCam(); else { clampCam(); applyCam(); } updateReviewButton(); }, 100); });
 }
 
 function renderCrumbs() {
@@ -594,7 +764,9 @@ function saveReview() {
 function updateReviewButton() {
   const n = review.comments.length, b = $('#dlReview');
   b.hidden = !n && !review.body.trim();
-  b.textContent = n ? `Download ${plural(n, 'comment')}` : 'Download review';
+  // Phones show the icon and the count only.
+  b.querySelector('.lbl').textContent = isMobile() ? (n || '') : n ? `Download ${plural(n, 'comment')}` : 'Download review';
+  b.setAttribute('aria-label', n ? `Download ${plural(n, 'comment')}` : 'Download review');
 }
 const byPosition = (a, b) => a.path.localeCompare(b.path) || (a.side === b.side ? a.line - b.line : a.side === 'LEFT' ? -1 : 1) || a.created - b.created;
 const lineComments = (path, side, line) => review.comments.filter(c => c.path === path && c.side === side && c.line === +line);
@@ -818,13 +990,62 @@ function go(next, push = true) {
   else renderSymbol(view.id);
   renderGraph();
   $('#panel').scrollTop = 0;
-  if (view.type !== 'summary' && window.matchMedia('(max-width: 960px)').matches) $('#panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#sheetLbl').textContent = view.type === 'summary' ? 'Summary' : view.type === 'module' ? modName(view.id) : symLabel(view.id);
+  if (view.type !== 'summary' && isMobile()) openSheet();
 }
+
+/* ---------- Bottom sheet (phones) ---------- */
+function openSheet(full) {
+  const p = $('#panel');
+  p.classList.add('open');
+  if (full !== undefined) p.classList.toggle('full', full);
+  document.body.classList.add('sheet-open');
+}
+function closeSheet() {
+  $('#panel').classList.remove('open', 'full');
+  document.body.classList.remove('sheet-open');
+}
+$('#sheetBtn').addEventListener('click', () => openSheet(false));
+$('#sheetClose').addEventListener('click', closeSheet);
+{
+  // Drag the grip down to close, up to expand; a tap toggles the size.
+  const grip = $('#grip'), p = $('#panel');
+  let y0 = null, dy = 0;
+  grip.addEventListener('pointerdown', e => { y0 = e.clientY; dy = 0; grip.setPointerCapture(e.pointerId); p.classList.add('dragging'); });
+  grip.addEventListener('pointermove', e => {
+    if (y0 === null) return;
+    dy = e.clientY - y0;
+    p.style.transform = dy > 0 ? `translateY(${dy}px)` : '';
+  });
+  const end = () => {
+    if (y0 === null) return;
+    y0 = null;
+    p.classList.remove('dragging');
+    p.style.transform = '';
+    if (dy > 90) closeSheet();
+    else if (dy < -40) p.classList.add('full');
+    else if (Math.abs(dy) < 6) p.classList.toggle('full');
+  };
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+}
+$('#optsBtn').addEventListener('click', () => {
+  const open = $('.stagebar').classList.toggle('open');
+  $('#optsBtn').setAttribute('aria-expanded', open);
+});
+document.addEventListener('click', e => {
+  if ($('.stagebar').classList.contains('open') && !e.target.closest('.stagebar')) { $('.stagebar').classList.remove('open'); $('#optsBtn').setAttribute('aria-expanded', false); }
+});
+
+/* ---------- Search on phones: the icon opens the field over the top bar ---------- */
+const closeSearch = () => { $('.top').classList.remove('searching'); $('#q').value = ''; $('#results').hidden = true; };
+$('#searchBtn').addEventListener('click', () => { $('.top').classList.add('searching'); $('#q').focus(); });
+$('#searchClose').addEventListener('click', closeSearch);
 const back = () => go(history.pop() || { type: 'summary' }, false);
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-mod],[data-sym],[data-action]');
   if (!b || b.disabled) return;
-  if (b.closest('#results')) { $('#results').hidden = true; $('#q').value = ''; }
+  if (b.closest('#results')) closeSearch();
   if (b.dataset.action === 'back') back();
   else if (b.dataset.action === 'zoom') go({ type: 'module', id: b.dataset.zoom, zoom: b.dataset.zoom });
   else if (b.dataset.action === 'unzoom') go({ type: 'module', id: zoom });
@@ -840,6 +1061,7 @@ document.addEventListener('click', e => {
 });
 $('#canvas').addEventListener('click', e => {
   if (e.target.closest('.node')) return;
+  if (isMobile()) closeSheet();
   if (zoom) { if (view.type !== 'module' || view.id !== zoom) go({ type: 'module', id: zoom, zoom }); }
   else if (view.type !== 'summary') go({ type: 'summary' });
 });
@@ -857,7 +1079,11 @@ $('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.no
 $('#canvas').addEventListener('mouseleave', () => hoverLinks(null));
 $('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && view.type !== 'summary' && document.activeElement !== $('#q') && !e.target.closest?.('textarea')) back(); });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || document.activeElement === $('#q') || e.target.closest?.('textarea')) return;
+  if (view.type !== 'summary') back();
+  else if (isMobile()) closeSheet();
+});
 
 /* ---------- Search ---------- */
 let searchIndex = [];
@@ -870,7 +1096,7 @@ $('#q').addEventListener('input', () => {
 });
 $('#q').addEventListener('keydown', e => {
   if (e.key === 'Enter') { const b = $('#results button.on'); if (b) b.click(); }
-  if (e.key === 'Escape') { $('#q').value = ''; $('#results').hidden = true; }
+  if (e.key === 'Escape') closeSearch();
 });
 document.addEventListener('click', e => { if (!e.target.closest('.search')) $('#results').hidden = true; });
 
