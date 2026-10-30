@@ -1,6 +1,8 @@
-import { createHash } from 'node:crypto';
 import { ts } from 'ts-morph';
-import type { NodeKind, Route, SymbolNode } from './schema.js';
+import { decoratorName, decoratorsOf, hash, nameOf } from './ast.js';
+import { nestRoutes } from './nest.js';
+import type { NodeKind, SymbolNode } from './schema.js';
+import { collectVueRoutes } from './vue.js';
 
 /** A node as collected from one file, before references are resolved. */
 export interface CollectedNode extends Omit<SymbolNode, 'module' | 'uses' | 'references'> {
@@ -14,93 +16,11 @@ export interface FileSymbols {
   byDecl: Map<ts.Node, string>;
   /** Hash of the file-level code (imports and top-level statements that are not nodes). */
   fileHash: string;
-  /** Controller prefix per class id. */
-  controllerPrefix: Map<string, string>;
 }
 
-export const hash = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 16);
 const norm = (s: string) => s.replace(/\s+/g, ' ').replace(/,\s*([)\]>}])/g, '$1').replace(/([([{<]) /g, '$1').replace(/ ([)\]}>])/g, '$1').trim();
 /** Signature without any formatting, for comparing base and PR versions. */
 export const compactSignature = (s: string | undefined) => (s ?? '').replace(/\s+/g, '').replace(/,([)\]>}])/g, '$1');
-
-const HTTP_VERBS = new Set(['Get', 'Post', 'Put', 'Patch', 'Delete', 'All', 'Options', 'Head', 'Search']);
-const ROUTE_DECORATORS: Record<string, Route['type']> = {
-  MessagePattern: 'message',
-  EventPattern: 'message',
-  GrpcMethod: 'message',
-  Query: 'graphql',
-  Mutation: 'graphql',
-  Subscription: 'graphql',
-  ResolveField: 'graphql',
-  Cron: 'schedule',
-  Interval: 'schedule',
-  Timeout: 'schedule',
-  OnEvent: 'event',
-};
-
-export function decoratorsOf(node: ts.Node): ts.Decorator[] {
-  return ts.canHaveDecorators(node) ? [...(ts.getDecorators(node) ?? [])] : [];
-}
-
-export function decoratorName(d: ts.Decorator): string {
-  let e = d.expression;
-  if (ts.isCallExpression(e)) e = e.expression;
-  if (ts.isPropertyAccessExpression(e)) return e.name.text;
-  if (ts.isIdentifier(e)) return e.text;
-  return e.getText();
-}
-
-export function decoratorArgs(d: ts.Decorator): readonly ts.Expression[] {
-  return ts.isCallExpression(d.expression) ? d.expression.arguments : [];
-}
-
-/** Literal text of a string-ish expression, or its source text. */
-export function literalText(e: ts.Expression | undefined): string | undefined {
-  if (!e) return undefined;
-  if (ts.isStringLiteralLike(e)) return e.text;
-  if (ts.isArrayLiteralExpression(e)) return e.elements.map((x) => literalText(x)).filter(Boolean).join('|');
-  return e.getText();
-}
-
-function stringArg(d: ts.Decorator | undefined, objectKey?: string): string {
-  if (!d) return '';
-  const a = decoratorArgs(d)[0];
-  if (!a) return '';
-  if (ts.isObjectLiteralExpression(a) && objectKey) {
-    for (const p of a.properties)
-      if (ts.isPropertyAssignment(p) && p.name.getText() === objectKey) return literalText(p.initializer) ?? '';
-    return '';
-  }
-  return literalText(a) ?? '';
-}
-
-/** GraphQL operation name: `@Query('users')` or `@Query(() => [User], { name: 'users' })`, never the type function. */
-function graphqlName(d: ts.Decorator): string {
-  for (const a of decoratorArgs(d)) {
-    if (ts.isStringLiteralLike(a)) return a.text;
-    if (ts.isObjectLiteralExpression(a))
-      for (const p of a.properties)
-        if (ts.isPropertyAssignment(p) && p.name.getText() === 'name') return literalText(p.initializer) ?? '';
-  }
-  return '';
-}
-
-export function joinPath(...parts: (string | undefined)[]): string {
-  const joined = parts
-    .filter((p): p is string => !!p)
-    .join('/')
-    .replace(/\/+/g, '/')
-    .replace(/^\/|\/$/g, '');
-  return '/' + joined;
-}
-
-function nameOf(n: ts.Node & { name?: ts.Node }): string | undefined {
-  const nm = n.name;
-  if (!nm) return undefined;
-  if (ts.isIdentifier(nm) || ts.isPrivateIdentifier(nm) || ts.isStringLiteral(nm) || ts.isNumericLiteral(nm)) return nm.text;
-  if (ts.isComputedPropertyName(nm)) return `[${nm.expression.getText()}]`;
-  return nm.getText();
-}
 
 function lineOf(sf: ts.SourceFile, pos: number) {
   return sf.getLineAndCharacterOfPosition(pos).line + 1;
@@ -150,7 +70,6 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
   const nodes: CollectedNode[] = [];
   const byDecl = new Map<ts.Node, string>();
   const ids = new Map<string, CollectedNode>();
-  const controllerPrefix = new Map<string, string>();
   const test = isTestFile(path);
   const topLevelOther: string[] = [];
 
@@ -197,10 +116,7 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
       signature: norm(`${modifierText(c)} ${tps} ${heritage}`) || undefined,
       ...decoratorList(c),
     });
-    const ctrl = decoratorsOf(c).find((d) => decoratorName(d) === 'Controller');
-    const resolver = decoratorsOf(c).some((d) => decoratorName(d) === 'Resolver');
-    const prefix = stringArg(ctrl, 'path');
-    if (ctrl) controllerPrefix.set(cls.id, prefix);
+    const routeOf = nestRoutes(c);
 
     for (const m of c.members) {
       let kind: NodeKind | null = null;
@@ -219,20 +135,8 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
         sig = fnSignature(m.initializer, modifierText(m));
       }
       if (!kind || !mname) continue;
-      const extra: Partial<CollectedNode> = { signature: sig, ...decoratorList(m) };
-      for (const d of decoratorsOf(m)) {
-        const dn = decoratorName(d);
-        if (ctrl && HTTP_VERBS.has(dn)) {
-          const p = stringArg(d, 'path');
-          extra.route = { type: 'http', verb: dn.toUpperCase(), path: p, fullPath: joinPath(prefix, p) };
-          break;
-        }
-        const type = ROUTE_DECORATORS[dn];
-        if (type && (type !== 'graphql' || resolver)) {
-          extra.route = { type, verb: dn, path: (type === 'graphql' ? graphqlName(d) : stringArg(d, 'name')) || mname };
-          break;
-        }
-      }
+      const route = routeOf(m, mname);
+      const extra: Partial<CollectedNode> = { signature: sig, ...decoratorList(m), ...(route ? { route } : {}) };
       add(m, kind, mname, extra, cls.id);
     }
   };
@@ -271,7 +175,7 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
     }
   }
 
-  collectRoutes(sf, add);
+  collectVueRoutes(sf, add);
 
   const fileHash = hash(topLevelOther.join('\n'));
   const fileNode: CollectedNode = {
@@ -286,64 +190,5 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
   };
   byDecl.set(sf, path);
   nodes.unshift(fileNode);
-  return { path, nodes, byDecl, fileHash, controllerPrefix };
-}
-
-/** The string value of property `key` of an object literal. */
-function stringProp(o: ts.ObjectLiteralExpression, key: string): string | undefined {
-  for (const p of o.properties)
-    if (ts.isPropertyAssignment(p) && nameOf(p) === key && ts.isStringLiteralLike(p.initializer)) return p.initializer.text;
-  return undefined;
-}
-
-const hasProp = (o: ts.ObjectLiteralExpression, key: string) =>
-  o.properties.some((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isMethodDeclaration(p)) && nameOf(p) === key);
-
-/**
- * vue-router route records (`{ path: '/orders', component: OrdersView }`) become
- * `route` nodes, so the components they render, and everything those use, lead
- * up to a page. Nested `children` paths are joined with their parents'.
- */
-function collectRoutes(sf: ts.SourceFile, add: (decl: ts.Node, kind: NodeKind, name: string, extra?: Partial<CollectedNode>) => CollectedNode) {
-  const parentPath = (o: ts.ObjectLiteralExpression): string | undefined => {
-    const arr = o.parent;
-    const prop = arr && ts.isArrayLiteralExpression(arr) ? arr.parent : undefined;
-    const parent = prop && ts.isPropertyAssignment(prop) && nameOf(prop) === 'children' ? prop.parent : undefined;
-    if (!parent || !ts.isObjectLiteralExpression(parent)) return undefined;
-    const own = stringProp(parent, 'path');
-    if (own === undefined) return undefined;
-    return own.startsWith('/') ? own : joinPath(parentPath(parent), own);
-  };
-  const visit = (n: ts.Node) => {
-    if (ts.isObjectLiteralExpression(n)) {
-      const path = stringProp(n, 'path');
-      if (path !== undefined && (hasProp(n, 'component') || hasProp(n, 'components'))) {
-        const fullPath = path.startsWith('/') ? joinPath(path) : joinPath(parentPath(n), path);
-        add(n, 'route', fullPath, { route: { type: 'page', verb: 'PAGE', path, fullPath } });
-      }
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-}
-
-/** Find `app.setGlobalPrefix('x')` in a file. */
-export function findGlobalPrefix(sf: ts.SourceFile): string | undefined {
-  let found: string | undefined;
-  const visit = (n: ts.Node) => {
-    if (found !== undefined) return;
-    if (
-      ts.isCallExpression(n) &&
-      ts.isPropertyAccessExpression(n.expression) &&
-      n.expression.name.text === 'setGlobalPrefix' &&
-      n.arguments[0] &&
-      ts.isStringLiteralLike(n.arguments[0])
-    ) {
-      found = n.arguments[0].text;
-      return;
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  return found;
+  return { path, nodes, byDecl, fileHash };
 }

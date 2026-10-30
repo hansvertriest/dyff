@@ -1,5 +1,7 @@
 import { ts } from 'ts-morph';
-import { hash } from './symbols.js';
+import { hash, joinPath, nameOf } from './ast.js';
+import type { NodeKind } from './schema.js';
+import type { CollectedNode } from './symbols.js';
 
 export const isVueFile = (p: string) => p.endsWith('.vue');
 
@@ -122,4 +124,42 @@ export function parseSource(path: string, text: string): ts.SourceFile {
   if (!isVueFile(path)) return ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   const v = vueToTs(text);
   return ts.createSourceFile(path + v.ext, v.code, ts.ScriptTarget.Latest, true, v.ext === '.tsx' ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+}
+
+/** The string value of property `key` of an object literal. */
+function stringProp(o: ts.ObjectLiteralExpression, key: string): string | undefined {
+  for (const p of o.properties)
+    if (ts.isPropertyAssignment(p) && nameOf(p) === key && ts.isStringLiteralLike(p.initializer)) return p.initializer.text;
+  return undefined;
+}
+
+const hasProp = (o: ts.ObjectLiteralExpression, key: string) =>
+  o.properties.some((p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isMethodDeclaration(p)) && nameOf(p) === key);
+
+/**
+ * vue-router route records (`{ path: '/orders', component: OrdersView }`) become
+ * `route` nodes, so the components they render, and everything those use, lead
+ * up to a page. Nested `children` paths are joined with their parents'.
+ */
+export function collectVueRoutes(sf: ts.SourceFile, add: (decl: ts.Node, kind: NodeKind, name: string, extra?: Partial<CollectedNode>) => CollectedNode) {
+  const parentPath = (o: ts.ObjectLiteralExpression): string | undefined => {
+    const arr = o.parent;
+    const prop = arr && ts.isArrayLiteralExpression(arr) ? arr.parent : undefined;
+    const parent = prop && ts.isPropertyAssignment(prop) && nameOf(prop) === 'children' ? prop.parent : undefined;
+    if (!parent || !ts.isObjectLiteralExpression(parent)) return undefined;
+    const own = stringProp(parent, 'path');
+    if (own === undefined) return undefined;
+    return own.startsWith('/') ? own : joinPath(parentPath(parent), own);
+  };
+  const visit = (n: ts.Node) => {
+    if (ts.isObjectLiteralExpression(n)) {
+      const path = stringProp(n, 'path');
+      if (path !== undefined && (hasProp(n, 'component') || hasProp(n, 'components'))) {
+        const fullPath = path.startsWith('/') ? joinPath(path) : joinPath(parentPath(n), path);
+        add(n, 'route', fullPath, { route: { type: 'page', verb: 'PAGE', path, fullPath } });
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
 }

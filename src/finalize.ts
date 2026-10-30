@@ -1,3 +1,4 @@
+import { resolveInjectionTokens } from './nest.js';
 import type { Index, ModuleInfo } from './schema.js';
 
 const dirOf = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
@@ -96,19 +97,7 @@ export function finalize(index: Index, allPaths: string[] = index.files.map((f) 
   }
   index.modules = [...modules.values()].sort((a, b) => a.id.localeCompare(b.id));
 
-  // String / symbol tokens resolve through the providers that provide them.
-  const providerTarget = new Map<string, string>();
-  for (const m of index.modules)
-    for (const p of m.providers) if (p.target && !providerTarget.has(p.token)) providerTarget.set(p.token, p.target);
-  for (const n of index.nodes)
-    for (const inj of n.injects ?? []) {
-      if (inj.kind === 'class' && inj.target && providerTarget.has(inj.target) && providerTarget.get(inj.target) !== inj.target) {
-        inj.target = providerTarget.get(inj.target);
-      } else if (!inj.target || inj.kind === 'token') {
-        const t = providerTarget.get(inj.token);
-        if (t) inj.target = t;
-      }
-    }
+  resolveInjectionTokens(index);
 
   // Incoming references.
   const refs = new Map<string, Set<string>>();

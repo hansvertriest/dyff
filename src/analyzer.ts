@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { Project, ts, type SourceFile } from 'ts-morph';
-import type { FileImport, FileInfo, Injection, ModuleImport, ModuleInfo, Provider, SymbolNode } from './schema.js';
-import { collectFile, decoratorArgs, decoratorName, decoratorsOf, findGlobalPrefix, isTestFile, type FileSymbols } from './symbols.js';
+import { findGlobalPrefix, nestInjections, nestModule, type Resolver } from './nest.js';
+import type { FileImport, FileInfo, ModuleInfo, SymbolNode } from './schema.js';
+import { collectFile, isTestFile, type FileSymbols } from './symbols.js';
 import { isVueFile, vueToTs } from './vue.js';
 
 export interface ProjectOptions {
@@ -41,6 +42,7 @@ export class Analyzer {
   readonly root: string;
   readonly project: Project;
   private readonly checker: ts.TypeChecker;
+  private readonly resolver: Resolver = { targetOf: (n) => this.targetOf(n), resolveSymbol: (n) => this.resolveSymbol(n) };
   private readonly symbolCache = new Map<string, FileSymbols>();
   /** Absolute path of a .vue file's TypeScript view -> project-relative path of the .vue file. */
   private readonly vueViews = new Map<string, string>();
@@ -225,11 +227,11 @@ export class Analyzer {
       const typeUses = out.uses.filter((to) => !valueUses.has(`${n.id}|${to}`));
       if (typeUses.length) out.typeUses = typeUses;
       if (n.kind === 'constructor' && ts.isConstructorDeclaration(decl)) {
-        const inj = this.injections(decl);
+        const inj = nestInjections(this.resolver, decl);
         if (inj.length) out.injects = inj;
       }
       if (n.kind === 'class' && ts.isClassLike(decl)) {
-        const mod = this.moduleDecl(decl, n.id, path);
+        const mod = nestModule(this.resolver, decl, n.id, path);
         if (mod) modules.push(mod);
       }
       return out;
@@ -272,146 +274,6 @@ export class Analyzer {
         ...(resolved ? { resolved } : {}),
         names: d.getNamedExports().map((e) => e.getName()),
       });
-    }
-    return out;
-  }
-
-  /** Unwrap forwardRef(() => X). */
-  private unwrapForwardRef(e: ts.Expression): { expr: ts.Expression; forwardRef: boolean } {
-    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'forwardRef') {
-      const fn = e.arguments[0];
-      if (fn && ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) return { expr: fn.body, forwardRef: true };
-      if (fn && ts.isArrowFunction(fn) && ts.isBlock(fn.body)) {
-        const ret = fn.body.statements.find(ts.isReturnStatement);
-        if (ret?.expression) return { expr: ret.expression, forwardRef: true };
-      }
-    }
-    return { expr: e, forwardRef: false };
-  }
-
-  /** Expand array literals, spreads and `const X = [...]` references into element expressions. */
-  private elements(e: ts.Expression | undefined, depth = 0): ts.Expression[] {
-    if (!e || depth > 5) return [];
-    while (ts.isAsExpression(e) || ts.isParenthesizedExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
-    if (ts.isArrayLiteralExpression(e))
-      return e.elements.flatMap((x) => (ts.isSpreadElement(x) ? this.elements(x.expression, depth + 1) : [x]));
-    if (ts.isIdentifier(e) || ts.isPropertyAccessExpression(e)) {
-      const sym = this.resolveSymbol(e);
-      const d = sym?.valueDeclaration;
-      if (d && ts.isVariableDeclaration(d) && d.initializer && ts.isArrayLiteralExpression(d.initializer))
-        return this.elements(d.initializer, depth + 1);
-    }
-    return [e];
-  }
-
-  private tokenOf(e: ts.Expression): string {
-    if (ts.isStringLiteralLike(e)) return JSON.stringify(e.text);
-    const { expr } = this.unwrapForwardRef(e);
-    return this.targetOf(expr) ?? expr.getText();
-  }
-
-  private moduleDecl(c: ts.ClassLikeDeclaration, classId: string, file: string): Omit<ModuleInfo, 'id'> | undefined {
-    const decos = decoratorsOf(c);
-    const md = decos.find((d) => decoratorName(d) === 'Module');
-    if (!md) return undefined;
-    const arg = decoratorArgs(md)[0];
-    const prop = (key: string) => {
-      if (!arg || !ts.isObjectLiteralExpression(arg)) return undefined;
-      for (const p of arg.properties) {
-        if (ts.isPropertyAssignment(p) && p.name.getText() === key) return p.initializer;
-        if (ts.isShorthandPropertyAssignment(p) && p.name.text === key) return p.name;
-      }
-      return undefined;
-    };
-
-    const imports: ModuleImport[] = this.elements(prop('imports')).map((raw) => {
-      const { expr: e0, forwardRef } = this.unwrapForwardRef(raw);
-      let e = e0;
-      let dynamic: string | undefined;
-      if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
-        dynamic = e.expression.name.text;
-        e = e.expression.expression;
-      }
-      const classId = ts.isIdentifier(e) || ts.isPropertyAccessExpression(e) ? this.targetOf(e) : undefined;
-      return {
-        name: ts.isIdentifier(e) ? e.text : e.getText().slice(0, 80),
-        ...(classId ? { classId } : {}),
-        external: !classId,
-        ...(dynamic ? { dynamic } : {}),
-        ...(forwardRef ? { forwardRef } : {}),
-      };
-    });
-
-    const providers: Provider[] = this.elements(prop('providers')).map((e) => {
-      if (ts.isObjectLiteralExpression(e)) {
-        const get = (k: string) =>
-          e.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer;
-        const provide = get('provide');
-        const token = provide ? this.tokenOf(provide) : '?';
-        for (const via of ['useClass', 'useExisting', 'useFactory', 'useValue'] as const) {
-          const v = get(via);
-          if (!v) continue;
-          const inject = this.elements(get('inject')).map((x) => this.tokenOf(x));
-          const target =
-            via === 'useValue' ? undefined : ts.isIdentifier(v) || ts.isPropertyAccessExpression(v) ? this.targetOf(v) : undefined;
-          return { token, via, ...(target ? { target } : {}), ...(inject.length ? { inject } : {}) };
-        }
-        return { token, via: 'unknown' as const };
-      }
-      const target = this.targetOf(e);
-      return target ? { token: target, via: 'class' as const, target } : { token: e.getText(), via: 'unknown' as const };
-    });
-
-    const ids = (key: string) => this.elements(prop(key)).map((e) => this.tokenOf(e));
-    return {
-      name: c.name?.text ?? 'default',
-      declared: true,
-      file,
-      classId,
-      ...(decos.some((d) => decoratorName(d) === 'Global') ? { global: true } : {}),
-      imports,
-      providers,
-      controllers: ids('controllers'),
-      exports: ids('exports'),
-    };
-  }
-
-  private injections(ctor: ts.ConstructorDeclaration): Injection[] {
-    const out: Injection[] = [];
-    for (const p of ctor.parameters) {
-      const param = p.name.getText();
-      const decos = decoratorsOf(p);
-      const optional = decos.some((d) => decoratorName(d) === 'Optional') || undefined;
-      const inj = decos.find((d) => decoratorName(d).startsWith('Inject'));
-      if (inj) {
-        const name = decoratorName(inj);
-        const a = decoratorArgs(inj)[0];
-        if (a) {
-          const { expr, forwardRef } = this.unwrapForwardRef(a);
-          const target = ts.isStringLiteralLike(expr) ? undefined : this.targetOf(expr);
-          const isClass = !!((this.resolveSymbol(expr)?.flags ?? 0) & ts.SymbolFlags.Class);
-          out.push({
-            param,
-            kind: name === 'Inject' ? (isClass ? 'class' : 'token') : name === 'InjectRepository' ? 'repository' : 'decorator',
-            token: ts.isStringLiteralLike(expr) ? JSON.stringify(expr.text) : (target ?? expr.getText()),
-            ...(target ? { target } : {}),
-            ...(name !== 'Inject' ? { decorator: name } : {}),
-            ...(forwardRef ? { forwardRef } : {}),
-            ...(optional ? { optional } : {}),
-          });
-          continue;
-        }
-      }
-      if (p.type && ts.isTypeReferenceNode(p.type)) {
-        const target = this.targetOf(p.type.typeName);
-        out.push({
-          param,
-          kind: 'class',
-          token: target ?? p.type.typeName.getText(),
-          ...(target ? { target } : {}),
-          ...(optional ? { optional } : {}),
-        });
-      }
     }
     return out;
   }
