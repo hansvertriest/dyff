@@ -109,6 +109,8 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .crumbs{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);width:100%}
 .crumbs b{color:var(--ink);font-weight:600}
 .node .meta{font:500 12px var(--sans);fill:var(--muted)}
+.node .nv path{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linejoin:round}
+.node .nv circle{fill:var(--accent)}
 .node .meta .a{fill:var(--add)} .node .meta .d{fill:var(--del)} .node .meta .w{fill:var(--del)}
 .node:focus{outline:none}
 .node:focus-visible rect.box{stroke:var(--accent);stroke-width:2}
@@ -137,6 +139,15 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .lead{color:var(--muted)}
 .back{margin:-4px 0 12px -8px;border:0;background:none;color:var(--muted);padding:6px 8px;border-radius:8px}
 .back:hover{color:var(--ink)}
+.ptop{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:-4px 0 12px}
+.ptop .back{margin:0 0 0 -8px}
+.viewed{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none;margin-left:auto}
+.viewed input{appearance:none;-webkit-appearance:none;flex:none;width:32px;height:18px;margin:0;border-radius:999px;background:var(--line);position:relative;cursor:pointer;transition:background .15s}
+.viewed input::before{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(15,20,30,.25);transition:transform .15s}
+.viewed input:checked{background:var(--accent)}
+.viewed input:checked::before{transform:translateX(14px)}
+.viewed:has(input:checked){color:var(--ink)}
+@media (prefers-reduced-motion: reduce){.viewed input,.viewed input::before{transition:none}}
 .stats{display:flex;gap:18px;margin:12px 0 4px;flex-wrap:wrap}
 .stats div{display:flex;flex-direction:column}
 .stats b{font-size:20px;font-weight:600}
@@ -330,6 +341,7 @@ details.file>summary.fhead:hover{background:var(--line)}
         <span><b style="color:var(--l-rem);border-top-style:dashed"></b>Removed dependency</span>
         <span><b style="color:var(--l-cyc-new);border-top-width:3px"></b>New cycle</span>
         <span><b style="color:var(--l-cyc)"></b>Existing cycle</span>
+        <span><svg width="16" height="10" viewBox="0 0 16 10" aria-hidden="true"><path d="M1 5s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4z" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/><circle cx="8" cy="5" r="1.8" fill="var(--accent)"/></svg>Not viewed yet</span>
       </div>
       </div>
     </div>
@@ -493,6 +505,7 @@ function fileGraph(folder) {
     n.dels = fs.reduce((a, f) => a + (f.change?.deletions || 0), 0);
     n.warn = fs.reduce((a, f) => a + (warns.get(f.path) || 0), 0);
   }
+  markUnviewed(nodes);
   // A link between two boxes stands for all file imports between them; each import is a pair, seen
   // now (after the PR) and/or before it.
   const link = (a, b, pk, side, extra) => {
@@ -681,11 +694,13 @@ function renderGraph() {
     // Top right: the NestJS modules in the box, and a circular module dependency inside it.
     const tag = [n.cycle && `<tspan class="${n.cycle === 'new' ? 'x' : 'p'}">⟳ cycle</tspan>`, n.modules?.length && (n.dir && (n.modules.length > 1 || moduleRoot(n.modules[0]) !== n.dir) ? plural(n.modules.length, 'module') : 'module')].filter(Boolean).join('  ');
     const nameLen = tag ? (n.dir ? 14 : 17) : n.dir ? 22 : 25;
-    nh += `<g class="${cls}" data-k="${esc(id)}" ${target} tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
+    // Bottom right: an eye while the box still holds a changed file that is not marked viewed.
+    const eye = n.unviewed ? `<g class="nv" transform="translate(${W - 28},55)"><path d="M1 5s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4z"/><circle cx="8" cy="5" r="1.8"/><title>${n.dir ? `${plural(n.unviewed, 'changed file')} not viewed yet` : 'Not viewed yet'}</title></g>` : '';
+    nh += `<g class="${cls}" data-k="${esc(id)}" ${target} tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}${n.unviewed ? ', not viewed yet' : ''}" transform="translate(${p.x},${p.y})">
       <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
       ${n.dir ? `<path class="fold" d="M18 13h5l2 2h7v8h-14z"/>` : ''}<text class="nm" x="${n.dir ? 38 : 18}" y="25">${esc(n.dir ? clipStart(n.name, nameLen) : clip(n.name, nameLen))}</text>${tag ? `<text class="tag" x="${W - 12}" y="24" text-anchor="end">${tag}</text>` : ''}
       <text class="pth" x="18" y="44">${esc(clip(n.sub ?? n.id, 29))}</text>
-      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
+      <text class="meta" x="18" y="64">${meta}</text>${eye}<title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
   cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="Files in ${esc(folderName(folder))}">
@@ -1057,6 +1072,30 @@ document.addEventListener('keydown', e => {
 document.addEventListener('input', e => { if (e.target.id === 'overall') { review.body = e.target.value; saveReview(); } });
 $('#dlReview').addEventListener('click', downloadReview);
 
+/* ---------- Viewed files ---------- */
+// Changed files marked viewed, kept in this browser per head commit like the review comments.
+let viewed = new Set();
+const viewedKey = () => 'dyff-viewed:' + (D.pr?.headCommit || D.root);
+function loadViewed() {
+  viewed = new Set();
+  try {
+    const v = JSON.parse(localStorage.getItem(viewedKey()) || 'null');
+    if (Array.isArray(v)) viewed = new Set(v);
+  } catch { /* storage unavailable */ }
+}
+function setViewed(path, on) {
+  if (on) viewed.add(path); else viewed.delete(path);
+  try { localStorage.setItem(viewedKey(), JSON.stringify([...viewed])); } catch { /* storage unavailable */ }
+  if (FG) markUnviewed(FG.nodes);
+  renderGraph();
+}
+/** Count, per box, the changed files in it that are not viewed yet. */
+function markUnviewed(nodes) {
+  for (const n of nodes.values()) n.unviewed = (n.files || []).filter(f => f.change && !viewed.has(f.path)).length;
+}
+const viewedSwitch = path => `<label class="viewed"><input type="checkbox" role="switch" data-viewed="${esc(path)}"${viewed.has(path) ? ' checked' : ''}> Viewed</label>`;
+document.addEventListener('change', e => { const p = e.target.dataset?.viewed; if (p !== undefined) setViewed(p, e.target.checked); });
+
 /* ---------- Files ---------- */
 const bySize = (a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions);
 /** A changed file: its changed symbols with their own diffs, then the whole file diff. */
@@ -1155,7 +1194,7 @@ function renderSymbol(id) {
   // A whole file gets the same breakdown as in a module: imports and top of file, then each changed symbol.
   const file = n.kind === 'file' ? fileByPath.get(n.file) : null;
   $('#pin').innerHTML = `
-    <button class="back" data-action="back">← Back</button>
+    <div class="ptop"><button class="back" data-action="back">← Back</button>${file?.change ? viewedSwitch(file.path) : ''}</div>
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
     <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button></p>
     <div class="chips" style="margin-bottom:10px">${ch ? `<span class="badge b-${ch.status}">${statusWord(ch.status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
@@ -1336,6 +1375,7 @@ function useIndex(data) {
   document.title = `dyff · ${baseOf(D.root)}`;
   review = { body: '', comments: [] };
   loadReview();
+  loadViewed();
   searchIndex = [
     ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
     ...D.modules.map(m => ({ mod: m.id, label: m.name, sub: m.id, key: (m.name + ' ' + m.id).toLowerCase() })),
