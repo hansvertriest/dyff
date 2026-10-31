@@ -67,6 +67,8 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .toggle{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
 .canvas{flex:1;min-height:0;position:relative;overflow:hidden;touch-action:none;cursor:grab;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
 .canvas.panning{cursor:grabbing}
+.canvas.glide svg{transition:transform .35s ease}
+@media (prefers-reduced-motion: reduce){.canvas.glide svg{transition:none}}
 .canvas svg{display:block;position:absolute;left:0;top:0;transform-origin:0 0}
 .opts{display:contents}
 .iconbtn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:36px;height:36px;padding:0 9px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
@@ -94,6 +96,7 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .node.s-removed .bar{fill:var(--del)}
 .node.affected .bar{fill:var(--accent)}
 .node .nm{font:600 14px var(--sans);fill:var(--ink)}
+.node .fold{fill:none;stroke:var(--muted);stroke-width:1.4;stroke-linejoin:round}
 .node .pth{font:12px var(--mono);fill:var(--muted)}
 .node.ext rect.box{fill:none;stroke-dasharray:2 3}
 .crumbs{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);width:100%}
@@ -253,7 +256,9 @@ details.file>summary.fhead:hover{background:var(--line)}
   .stagebar{position:absolute;top:8px;left:8px;right:8px;z-index:5;padding:0;flex-wrap:nowrap;align-items:flex-start;pointer-events:none}
   .stagebar>*{pointer-events:auto}
   .crumbs{width:auto;flex:0 1 auto;min-width:0;height:36px;padding:0 12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;white-space:nowrap;overflow:hidden}
-  .crumbs b{overflow:hidden;text-overflow:ellipsis}
+  .crumbs{overflow-x:auto;scrollbar-width:none}
+  .crumbs::-webkit-scrollbar{display:none}
+  .crumbs>*{flex:none}
   #optsBtn{margin-left:auto}
   .opts{display:none}
   .stagebar.open .opts{display:flex;flex-direction:column;align-items:flex-start;gap:10px;position:absolute;top:44px;right:0;width:min(300px, calc(100vw - 16px));max-height:calc(100% - 60px);overflow:auto;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(15,20,30,.16)}
@@ -336,7 +341,7 @@ const baseOf = p => p.slice(p.lastIndexOf('/') + 1);
 const short = id => id.includes('#') ? id.slice(id.indexOf('#') + 1) : baseOf(id);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-let D, byId, modById, fileByPath, nodesByFile, M, FG, zoom = null;
+let D, byId, modById, fileByPath, nodesByFile, M, FG, zoom = null, folder = null;
 let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, history = [];
 
 /* ---------- Model ---------- */
@@ -345,6 +350,7 @@ function build() {
   nodesByFile = new Map();
   for (const n of D.nodes) { if (!nodesByFile.has(n.file)) nodesByFile.set(n.file, []); nodesByFile.get(n.file).push(n); }
   FG = null;
+  moduleRoots.clear(); compacted.clear();
   modById = new Map(D.modules.map(m => [m.id, m]));
   fileByPath = new Map(D.files.map(f => [f.path, f]));
   const C = D.checks;
@@ -384,33 +390,93 @@ function build() {
   M = { nodes, edges };
 }
 
-/* ---------- Files inside a module ---------- */
-// One box per file of the module, and one per other module its files import or are imported by.
-const fileKey = f => f.module === zoom ? f.path : 'mod:' + f.module;
-function fileGraph(mod) {
-  const nodes = new Map(), edges = new Map();
+/* ---------- Folders and files inside a module ---------- */
+// The map walks a module's folder tree one level at a time. Each file goes to its nearest box at
+// the current folder: itself, a subfolder (a chain of single-child folders is one box), a folder
+// elsewhere in the module, or its module when it is in another one.
+const moduleRoots = new Map(), compacted = new Map();
+const under = (path, dir) => !dir || path.startsWith(dir + '/');
+const relTo = (path, dir) => dir ? path.slice(dir.length + 1) : path;
+/** The deepest folder that holds all of a module's files. */
+function moduleRoot(mod) {
+  if (!moduleRoots.has(mod)) {
+    const dirs = D.files.filter(f => f.module === mod).map(f => dirOf(f.path).split('/'));
+    let common = dirs[0] || [];
+    for (const d of dirs) { let k = 0; while (k < common.length && common[k] === d[k]) k++; common = common.slice(0, k); }
+    moduleRoots.set(mod, common.join('/'));
+  }
+  return moduleRoots.get(mod);
+}
+/** A folder, extended through subfolders as long as it holds only one subfolder and no files. */
+function compact(mod, dir) {
+  const key = `${mod}|${showTests}|${dir}`;
+  if (compacted.has(key)) return compacted.get(key);
+  const files = D.files.filter(f => f.module === mod && (showTests || !f.test)).map(f => f.path);
+  let d = dir;
+  for (;;) {
+    const inside = files.filter(p => under(p, d));
+    const next = new Set(inside.map(p => relTo(p, d).split('/')).map(seg => seg.length > 1 ? seg[0] : null));
+    if (!inside.length || next.has(null) || next.size !== 1) break;
+    d = (d ? d + '/' : '') + [...next][0];
+  }
+  compacted.set(key, d);
+  return d;
+}
+function fileGraph(mod, folder) {
+  const nodes = new Map(), edges = new Map(), root = moduleRoot(mod);
   const shown = f => f && (showTests || !f.test);
+  const keyOf = path => {
+    const f = fileByPath.get(path);
+    if (!f) return null;
+    if (f.module !== mod) return 'mod:' + f.module;
+    if (under(path, folder)) {
+      const rest = relTo(path, folder), i = rest.indexOf('/');
+      return i < 0 ? path : 'dir:' + compact(mod, (folder ? folder + '/' : '') + rest.slice(0, i));
+    }
+    // Outside the current folder: the folder (or file) where its path leaves the current one.
+    const a = folder.split('/'), b = path.split('/');
+    let k = 0;
+    while (k < a.length && k < b.length - 1 && a[k] === b[k]) k++;
+    return k === b.length - 1 ? path : 'dir:' + compact(mod, b.slice(0, k + 1).join('/'));
+  };
   const warns = new Map();
   for (const d of D.checks.danglingReferences) { const f = byId.get(d.from)?.file; if (f) warns.set(f, (warns.get(f) || 0) + 1); }
+  const usesChanged = f => !f.change && (nodesByFile.get(f.path) || []).some(n => n.uses.some(u => byId.get(u)?.change));
+  const stateOf = files => {
+    const ch = files.filter(f => f.change);
+    if (!ch.length) return 'none';
+    for (const st of ['added', 'removed']) if (files.every(f => f.change?.status === st)) return st;
+    return 'modified';
+  };
   for (const f of D.files) {
     if (f.module !== mod || !shown(f)) continue;
-    const ch = f.change, dir = dirOf(f.path);
-    const usesChanged = !ch && (nodesByFile.get(f.path) || []).some(n => n.uses.some(u => byId.get(u)?.change));
-    nodes.set(f.path, { id: f.path, name: baseOf(f.path), sub: dir.startsWith(mod + '/') ? dir.slice(mod.length + 1) + '/' : dir + '/', file: f,
-      changed: !!ch, state: !ch ? 'none' : ch.status === 'added' || ch.status === 'removed' ? ch.status : 'modified',
-      affected: usesChanged, adds: ch?.additions || 0, dels: ch?.deletions || 0, warn: warns.get(f.path) || 0, out: new Map(), inn: new Set() });
+    const k = keyOf(f.path);
+    let n = nodes.get(k);
+    if (!n) {
+      const outside = !under(f.path, folder), dir = k.startsWith('dir:') ? k.slice(4) : null;
+      n = { id: k, files: [], ext: outside, outside, out: new Map(), inn: new Set() };
+      if (dir) Object.assign(n, { dir, name: relTo(dir, outside ? root : folder) + '/', sub: outside ? `Elsewhere in ${modName(mod)}` : dir + '/' });
+      else Object.assign(n, { file: f, name: baseOf(f.path), sub: under(dirOf(f.path), root) && dirOf(f.path) !== root ? relTo(dirOf(f.path), root) + '/' : (dirOf(f.path) || '.') + '/' });
+      nodes.set(k, n);
+    }
+    n.files.push(f);
+  }
+  for (const n of nodes.values()) {
+    const fs = n.files;
+    n.state = stateOf(fs);
+    n.changed = n.state !== 'none';
+    n.nChanged = fs.filter(f => f.change).length;
+    n.affected = !n.changed && fs.some(usesChanged);
+    n.adds = fs.reduce((a, f) => a + (f.change?.additions || 0), 0);
+    n.dels = fs.reduce((a, f) => a + (f.change?.deletions || 0), 0);
+    n.warn = fs.reduce((a, f) => a + (warns.get(f.path) || 0), 0);
   }
   const ext = m => {
     const k = 'mod:' + m;
     if (!nodes.has(k)) nodes.set(k, { id: k, ext: true, mod: m, name: modName(m), sub: m, changed: false, state: 'none', affected: false, adds: 0, dels: 0, warn: 0, out: new Map(), inn: new Set() });
     return k;
   };
-  const add = (from, to, side, im) => {
-    const k = from + '>' + to;
-    let e = edges.get(k);
-    if (!e) edges.set(k, e = { from, to, now: false, before: false, unknown: false, typeOnly: true, cycle: false });
-    e[side] = true; if (!im.typeOnly) e.typeOnly = false;
-  };
+  // A link between two boxes stands for all file imports between them.
   for (const f of D.files) {
     if (!shown(f)) continue;
     const ch = f.change;
@@ -420,31 +486,50 @@ function fileGraph(mod) {
     for (const [side, list] of sides) for (const im of list) {
       const t = fileByPath.get(im.resolved);
       if (!shown(t) || (f.module !== mod && t.module !== mod)) continue;
-      const a = f.module === mod ? f.path : ext(f.module), b = t.module === mod ? t.path : ext(t.module);
+      const a = f.module === mod ? keyOf(f.path) : ext(f.module), b = t.module === mod ? keyOf(t.path) : ext(t.module);
       if (a === b) continue;
-      add(a, b, side, im);
-      if (!before) edges.get(a + '>' + b).unknown = true;
+      const k = a + '>' + b;
+      let e = edges.get(k);
+      if (!e) edges.set(k, e = { from: a, to: b, pairs: new Map(), typeOnly: true, cycle: false });
+      const pk = f.path + '>' + t.path;
+      let pr = e.pairs.get(pk);
+      if (!pr) e.pairs.set(pk, pr = { now: false, before: false, unknown: !before });
+      pr[side] = true;
+      if (!im.typeOnly) e.typeOnly = false;
     }
   }
   for (const e of edges.values()) {
-    e.changed = e.now && !e.before && !e.unknown;
-    e.removed = e.before && !e.now && !e.unknown;
+    const ps = [...e.pairs.values()];
+    e.changed = ps.some(p => p.now && !p.before && !p.unknown);
+    e.removed = ps.every(p => p.before && !p.now && !p.unknown);
+    e.files = ps.length;
     // Still imports a file this PR deletes: shown like a PR link, it is what breaks.
-    e.broken = e.now && nodes.get(e.to).state === 'removed';
+    e.broken = ps.some(p => p.now) && nodes.get(e.to).state === 'removed';
     nodes.get(e.from).out.set(e.to, e); nodes.get(e.to).inn.add(e.from);
     if (e.changed || e.removed || e.broken) { nodes.get(e.from).prLink = true; nodes.get(e.to).prLink = true; }
   }
-  return { files: true, mod, tests: showTests, nodes, edges };
+  // Unchanged boxes in the folder fold into one; visibleIds sets its count.
+  nodes.set('rest', { id: 'rest', rest: true, name: '', sub: '', state: 'none', changed: false, affected: false, adds: 0, dels: 0, warn: 0, out: new Map(), inn: new Set() });
+  return { files: true, mod, folder, root, tests: showTests, keyOf, nodes, edges };
 }
-const graph = () => !zoom ? M : FG && FG.mod === zoom && FG.tests === showTests ? FG : (FG = fileGraph(zoom));
+const graph = () => !zoom ? M : FG && FG.mod === zoom && FG.folder === folder && FG.tests === showTests ? FG : (FG = fileGraph(zoom, folder));
+/** The folder to show for a module: the one asked for when it is inside the module, else the module's root. */
+function folderFor(mod, dir) {
+  const root = moduleRoot(mod);
+  return compact(mod, dir !== undefined && dir !== null && under(dir + '/', root) ? dir : root);
+}
 
 /* ---------- Graph ---------- */
 const W = 232, H = 78, CG = 92, RG = 22, PAD = 28;
 function visibleIds() {
   const G = graph(), ids = new Set();
   if (G.files) {
-    // Every file of the module; other modules only when the PR changed a link to them.
-    for (const n of G.nodes.values()) if (!n.ext || showAll || n.prLink) ids.add(n.id);
+    // What the PR changed, uses changed code or changed a link; the rest of the folder folds into
+    // one box, and other folders and modules show only when the PR changed a link to them.
+    const inside = [...G.nodes.values()].filter(n => !n.ext && !n.rest);
+    const relevant = inside.filter(n => n.changed || n.affected || n.warn || n.prLink);
+    for (const n of showAll || !relevant.length ? inside : relevant) ids.add(n.id);
+    for (const n of G.nodes.values()) if (n.ext && (showAll || n.prLink)) ids.add(n.id);
   } else {
     for (const n of G.nodes.values()) if (n.changed) ids.add(n.id);
     if (showAll || !ids.size) for (const n of G.nodes.values()) ids.add(n.id);
@@ -452,6 +537,15 @@ function visibleIds() {
   }
   if (selected && G.nodes.has(selected)) { ids.add(selected); if (G.files) { const n = G.nodes.get(selected); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); } }
   for (const id of hot) ids.add(id);
+  if (G.files) {
+    const folded = [...G.nodes.values()].filter(n => !n.ext && !n.rest && !ids.has(n.id));
+    if (folded.length) {
+      const r = G.nodes.get('rest'), nf = folded.filter(n => n.dir).length;
+      r.name = `${folded.length} unchanged`;
+      r.sub = nf === folded.length ? plural(nf, 'folder') : nf ? 'files and folders' : plural(folded.length, 'file');
+      ids.add('rest');
+    }
+  }
   return [...ids].filter(id => G.nodes.has(id));
 }
 function layout(ids) {
@@ -484,7 +578,8 @@ function layout(ids) {
   return { pos, col, bottom, width: PAD * 2 + cols.length * (W + CG) - CG, height: PAD * 2 + fullH + 30 };
 }
 const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
-let hot = new Set(), hoverMod = null;
+const clipStart = (s, n) => s.length > n ? '…' + s.slice(s.length - n + 1) : s;
+let hot = new Set(), hoverMod = null, boxPos = new Map();
 function renderGraph() {
   const cv = $('#canvas');
   hoverMod = null;
@@ -492,8 +587,9 @@ function renderGraph() {
   renderCrumbs();
   const ids = visibleIds();
   if (!ids.length) { cv.innerHTML = `<p class="empty">${G.files ? 'No files.' : 'No modules.'}</p>`; return; }
-  const L = layout(ids), { pos, col, bottom, width } = L;
-  let height = L.height;
+  const L = layout(ids), { pos, col, bottom } = L;
+  boxPos = pos;
+  let height = L.height, width = L.width;
   const set = new Set(ids);
   const focus = selected && G.nodes.has(selected) ? new Set([selected, ...G.nodes.get(selected).out.keys(), ...G.nodes.get(selected).inn]) : hot.size ? hot : null;
   const vis = [...G.edges.values()].filter(e => set.has(e.from) && set.has(e.to));
@@ -531,23 +627,27 @@ function renderGraph() {
   for (const id of ids) {
     const n = G.nodes.get(id), p = pos.get(id);
     const cls = ['node', 's-' + n.state, n.ext ? 'ext' : '', n.affected ? 'affected' : '', !n.changed && !n.affected ? 'context' : '', id === selected ? 'sel' : '', hot.has(id) && id !== selected ? 'hot' : '', focus && !focus.has(id) ? 'dim' : ''].join(' ');
-    const meta = n.ext ? 'Other module'
+    const files = n.files ? plural(n.files.length, 'file') : '';
+    const meta = n.rest ? (isMobile() ? 'Tap to show' : 'Click to show')
+      : n.ext && !n.dir && !n.file ? 'Other module'
+      : n.dir && n.changed ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${n.nChanged} of ${files}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
+      : n.dir ? (n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? `Uses changed code · ${files}` : files)
       : n.changed
       ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${n.file ? statusWord(n.file.change.status) : plural(n.files.length, 'file')}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
       : n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? 'Uses changed code' : 'Unchanged';
-    const target = n.file ? `data-sym="${esc(id)}"` : `data-mod="${esc(n.ext ? n.mod : id)}"`;
+    const target = n.rest ? 'data-action="show-all"' : n.dir ? `data-folder="${esc(n.dir)}"` : n.file ? `data-sym="${esc(id)}"` : `data-mod="${esc(n.ext ? n.mod : id)}"`;
     nh += `<g class="${cls}" data-k="${esc(id)}" ${target} tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
       <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
-      <text class="nm" x="18" y="25">${esc(clip(n.name, 25))}</text>
+      ${n.dir ? `<path class="fold" d="M18 13h5l2 2h7v8h-14z"/>` : ''}<text class="nm" x="${n.dir ? 38 : 18}" y="25">${esc(n.dir ? clipStart(n.name, 22) : clip(n.name, 25))}</text>
       <text class="pth" x="18" y="44">${esc(clip(n.sub ?? n.id, 29))}</text>
-      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.name + '\n' + (n.file ? n.file.path : n.ext ? n.mod : n.id))}</title></g>`;
+      <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
-  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="${G.files ? `Files in ${esc(modName(zoom))}` : 'Modules touched by this pull request'}">
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="${G.files ? `Files in ${esc(folder || modName(zoom))}` : 'Modules touched by this pull request'}">
     <defs>${['mn', 'mc', 'mr', 'mp', 'mx'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r', 'mk-p', 'mk-x'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
     ${eh}${nh}</svg>`;
   cam.w = vw; cam.h = height;
-  const key = `${zoom || ''}|${vw}x${height}`;
+  const key = `${zoom || ''}|${folder ?? ''}|${vw}x${height}`;
   if (key !== cam.key) { cam.key = key; fitCam(); }
   else { clampCam(); applyCam(); }
 }
@@ -556,7 +656,7 @@ function renderGraph() {
 // The map is drawn at its natural size and moved with a transform: drag or scroll to pan,
 // pinch or ctrl/⌘ + scroll to zoom. A new graph (another level, other modules shown) is fitted to the screen.
 const cam = { s: 1, x: 0, y: 0, w: 0, h: 0, key: '', fitted: true };
-const MIN_S = 0.15, MAX_S = 3;
+const MIN_S = 0.15, MAX_S = 3, READ_S = 0.45;
 const isMobile = () => window.matchMedia('(max-width: 960px)').matches;
 /** Parts of the canvas covered by the floating controls on phones. */
 const insets = () => isMobile() ? { top: 52, bottom: 72 } : { top: 0, bottom: 0 };
@@ -581,6 +681,47 @@ function fitCam() {
   cam.y = top + Math.max(0, (ch - cam.h * cam.s) / 2);
   cam.fitted = true;
   applyCam();
+}
+/** The part of the canvas that is not covered: below the floating controls and above the sheet on phones. */
+function visibleArea() {
+  const cv = $('#canvas'), w = cv.clientWidth, h = cv.clientHeight;
+  if (!isMobile()) return { left: 0, top: 0, width: w, height: h, x: w / 2, y: h / 2 };
+  const p = $('#panel'), { top } = insets(), cvTop = cv.getBoundingClientRect().top;
+  const bottom = Math.max(top + 40, p.classList.contains('open') ? Math.min(h, window.innerHeight - p.offsetHeight - cvTop) : h - insets().bottom);
+  return { left: 0, top, width: w, height: bottom - top, x: w / 2, y: (top + bottom) / 2 };
+}
+/** Fit a set of boxes into the visible area, at most at full size. */
+function fitBoxes(ids) {
+  const ps = ids.map(id => boxPos.get(id)).filter(Boolean), cv = $('#canvas');
+  if (!ps.length || !cv.clientWidth) return;
+  const x0 = Math.min(...ps.map(p => p.x)), y0 = Math.min(...ps.map(p => p.y));
+  const x1 = Math.max(...ps.map(p => p.x + W)), y1 = Math.max(...ps.map(p => p.y + H));
+  const a = visibleArea(), m = 16, fw = (a.width - 2 * m) / (x1 - x0), fh = (a.height - 2 * m) / (y1 - y0);
+  // On phones the visible strip is small: stop at a readable size and line the boxes up from the
+  // top-left, so the rest is a pan away instead of everything shrinking to unreadable.
+  cam.s = Math.max(MIN_S, Math.min(1, fw, fh));
+  if (isMobile()) cam.s = Math.max(cam.s, READ_S);
+  cam.x = (x1 - x0) * cam.s > a.width - 2 * m ? a.left + m - x0 * cam.s : a.x - ((x0 + x1) / 2) * cam.s;
+  cam.y = (y1 - y0) * cam.s > a.height - 2 * m ? a.top + m - y0 * cam.s : a.y - ((y0 + y1) / 2) * cam.s;
+  cam.fitted = false;
+  clampCam();
+  applyCam();
+}
+/** Glide the map so a box sits in the middle of the visible area, zooming in when it is too small to read. */
+function focusBox(id) {
+  const p = boxPos.get(id), cv = $('#canvas');
+  if (!p || !cv.clientWidth) return;
+  const minS = isMobile() ? 0.7 : 0.5;
+  if (cam.s < minS) cam.s = minS;
+  const { x, y } = visibleArea();
+  cam.x = x - (p.x + W / 2) * cam.s;
+  cam.y = y - (p.y + H / 2) * cam.s;
+  cam.fitted = false;
+  clampCam();
+  cv.classList.add('glide');
+  applyCam();
+  clearTimeout(focusBox.t);
+  focusBox.t = setTimeout(() => cv.classList.remove('glide'), 400);
 }
 function zoomAt(f, px, py) {
   const s = Math.min(MAX_S, Math.max(MIN_S, cam.s * f)), k = s / cam.s;
@@ -607,7 +748,7 @@ function panBy(dx, dy) {
   };
   cv.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (!pts.size) { moved = 0; dragged = false; }
+    if (!pts.size) { moved = 0; dragged = false; cv.classList.remove('glide'); }
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     last = summary();
   });
@@ -639,6 +780,7 @@ function panBy(dx, dy) {
   cv.addEventListener('click', e => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
   cv.addEventListener('wheel', e => {
     e.preventDefault();
+    cv.classList.remove('glide');
     const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? cv.clientHeight : 1;
     if (e.ctrlKey || e.metaKey) { const [px, py] = local(e.clientX, e.clientY); zoomAt(Math.exp(-e.deltaY * k * 0.01), px, py); }
     else panBy(-e.deltaX * k, -e.deltaY * k);
@@ -664,8 +806,16 @@ function panBy(dx, dy) {
 function renderCrumbs() {
   const c = $('#crumbs');
   c.hidden = !zoom;
-  if (zoom) c.innerHTML = `<button class="linkbtn" data-action="unzoom">All modules</button><span>›</span><b>${esc(modName(zoom))}</b><span>· files</span>`;
-  $('#allWrap').lastChild.textContent = zoom ? ' Show all connected modules' : ' Show all modules';
+  if (zoom) {
+    // All modules › Module › each folder from the module's root down to the current one.
+    const root = moduleRoot(zoom), segs = folder !== root ? relTo(folder, root).split('/') : [];
+    const parts = [`<button class="linkbtn" data-action="unzoom">All modules</button>`,
+      segs.length ? `<button class="linkbtn" data-folder="${esc(root)}">${esc(modName(zoom))}</button>` : `<b>${esc(modName(zoom))}</b>`,
+      ...segs.map((sg, i) => i === segs.length - 1 ? `<b>${esc(sg)}</b>` : `<button class="linkbtn" data-folder="${esc((root ? root + '/' : '') + segs.slice(0, i + 1).join('/'))}">${esc(sg)}</button>`)];
+    c.innerHTML = parts.join('<span>›</span>');
+    c.scrollLeft = c.scrollWidth;
+  }
+  $('#allWrap').lastChild.textContent = zoom ? ' Show unchanged files and other modules' : ' Show all modules';
 }
 
 /* ---------- Panel helpers ---------- */
@@ -924,6 +1074,23 @@ function renderModule(id) {
     ${n.files.length ? `<h3>What changed</h3>${files}` : ''}`;
 }
 
+/* ---------- Folder ---------- */
+function renderFolder(dir) {
+  const inFolder = D.files.filter(f => f.module === zoom && under(f.path, dir) && (showTests || !f.test));
+  const changed = inFolder.filter(f => f.change).sort(bySize);
+  const affected = inFolder.filter(f => !f.change && (nodesByFile.get(f.path) || []).some(n => n.uses.some(u => byId.get(u)?.change)));
+  const a = changed.reduce((x, f) => x + f.change.additions, 0), d = changed.reduce((x, f) => x + f.change.deletions, 0);
+  const root = moduleRoot(zoom);
+  $('#pin').innerHTML = `
+    <button class="back" data-action="back">← Back</button>
+    <h2>${esc(dir === root ? modName(zoom) : relTo(dir, root) + '/')}</h2><p class="path">${esc((dir || '.') + '/')}</p>
+    <p class="lead">${changed.length ? `${plural(changed.length, 'file')} of ${inFolder.length} changed in this folder and below.` : `None of its ${plural(inFolder.length, 'file')} changed in this PR.`}</p>
+    ${changed.length ? `<div class="stats"><div><b><span class="n-a">+${a}</span> <span class="n-d">−${d}</span></b><span>lines</span></div></div>` : ''}
+    ${dir !== root ? '' : `<p><button class="linkbtn" data-mod="${esc(zoom)}">About ${esc(modName(zoom))} →</button></p>`}
+    ${changed.length ? `<h3>What changed<span class="count">${changed.length}</span></h3>${changed.map(f => fileSection(f, changed.length > 3)).join('')}` : ''}
+    ${affected.length ? `<h3>Not changed, but use changed code<span class="count">${affected.length}</span></h3><div class="refs">${affected.map(f => symBtn(f.path)).join('')}</div>` : ''}`;
+}
+
 /* ---------- Symbol focus ---------- */
 function tree(id, dir, depth, seen) {
   if (depth === 0) return '';
@@ -977,21 +1144,34 @@ function go(next, push = true) {
   selected = !zoom && view.type === 'module' ? view.id : null;
   hot = new Set();
   const sym = view.type === 'symbol' ? byId.get(view.id) : null;
+  // A symbol opens the folder of its file; the folder is kept in the view so Back returns to it.
+  folder = view.folder = zoom ? folderFor(zoom, view.folder ?? (sym ? dirOf(sym.file) : view.type === 'folder' ? view.id : undefined)) : null;
   if (zoom && sym) {
-    // In the file view a file is selected; a symbol inside a file lights up the files it is used from and uses.
+    // In the file view a file is selected; a symbol inside a file lights up the boxes it is used from and uses.
+    const { keyOf } = graph();
     if (sym.kind === 'file') selected = sym.file;
-    else for (const x of [sym.id, ...sym.references, ...sym.uses]) { const f = fileByPath.get(byId.get(x)?.file); if (f) hot.add(fileKey(f)); }
+    else for (const x of [sym.id, ...sym.references, ...sym.uses]) { const k = keyOf(byId.get(x)?.file); if (k) hot.add(k); }
   } else if (view.type === 'symbol') {
     const n = byId.get(view.id);
     if (n) { hot.add(n.module); for (const r of n.references) hot.add(byId.get(r)?.module); for (const u of n.uses) hot.add(byId.get(u)?.module); hot.delete(undefined); }
   }
   if (view.type === 'summary') renderSummary();
   else if (view.type === 'module') renderModule(view.id);
+  else if (view.type === 'folder') renderFolder(view.id);
   else renderSymbol(view.id);
   renderGraph();
   $('#panel').scrollTop = 0;
-  $('#sheetLbl').textContent = view.type === 'summary' ? 'Summary' : view.type === 'module' ? modName(view.id) : symLabel(view.id);
-  if (view.type !== 'summary' && isMobile()) openSheet();
+  $('#sheetLbl').textContent = view.type === 'summary' ? 'Summary' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? baseOf(view.id) + '/' : symLabel(view.id);
+  // A tap on the empty map deselects without opening the details again.
+  if (view.type !== 'summary' && !view.fromCanvas && isMobile()) openSheet();
+  // Bring the selected box into view: a selected module or file, else the file or module of a symbol.
+  // Opening a folder fits its own boxes (not the other folders and modules around them).
+  const target = selected ?? (sym ? (zoom ? graph().keyOf(sym.file) : sym.module) : null);
+  if (target) focusBox(target);
+  else if (zoom && (view.type === 'folder' || view.type === 'module') && !view.fromCanvas) {
+    const G = graph();
+    fitBoxes([...boxPos.keys()].filter(k => !G.nodes.get(k)?.ext));
+  }
 }
 
 /* ---------- Bottom sheet (phones) ---------- */
@@ -1043,16 +1223,18 @@ $('#searchBtn').addEventListener('click', () => { $('.top').classList.add('searc
 $('#searchClose').addEventListener('click', closeSearch);
 const back = () => go(history.pop() || { type: 'summary' }, false);
 document.addEventListener('click', e => {
-  const b = e.target.closest('[data-mod],[data-sym],[data-action]');
+  const b = e.target.closest('[data-mod],[data-sym],[data-action],[data-folder]');
   if (!b || b.disabled) return;
   if (b.closest('#results')) closeSearch();
   if (b.dataset.action === 'back') back();
+  else if (b.dataset.action === 'show-all') { showAll = $('#showAll').checked = true; renderGraph(); }
+  else if (b.dataset.folder !== undefined && zoom) go({ type: 'folder', id: b.dataset.folder, zoom, folder: b.dataset.folder });
   else if (b.dataset.action === 'zoom') go({ type: 'module', id: b.dataset.zoom, zoom: b.dataset.zoom });
   else if (b.dataset.action === 'unzoom') go({ type: 'module', id: zoom });
   else if (zoom && b.dataset.sym) {
     // A symbol from another module opens that module's files.
     const z = fileByPath.get(byId.get(b.dataset.sym)?.file)?.module || zoom;
-    go(b.closest('.node') && selected === b.dataset.sym ? { type: 'module', id: zoom, zoom } : { type: 'symbol', id: b.dataset.sym, zoom: z });
+    go(b.closest('.node') && selected === b.dataset.sym ? { type: 'folder', id: folder, zoom, folder } : { type: 'symbol', id: b.dataset.sym, zoom: z });
   }
   // In the file view another module opens its own files.
   else if (zoom && b.dataset.mod) go({ type: 'module', id: b.dataset.mod, zoom: b.dataset.mod });
@@ -1062,12 +1244,13 @@ document.addEventListener('click', e => {
 $('#canvas').addEventListener('click', e => {
   if (e.target.closest('.node')) return;
   if (isMobile()) closeSheet();
-  if (zoom) { if (view.type !== 'module' || view.id !== zoom) go({ type: 'module', id: zoom, zoom }); }
+  if (zoom) { if (view.type !== 'folder' || view.id !== folder) go({ type: 'folder', id: folder, zoom, folder, fromCanvas: true }); }
   else if (view.type !== 'summary') go({ type: 'summary' });
 });
 $('#canvas').addEventListener('dblclick', e => { const g = e.target.closest('.node[data-mod]'); if (g && !zoom) go({ type: 'module', id: g.dataset.mod, zoom: g.dataset.mod }); });
 $('#canvas').addEventListener('keydown', e => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); g.dispatchEvent(new MouseEvent('click', { bubbles: true })); } });
 $('#showAll').addEventListener('change', e => { showAll = e.target.checked; renderGraph(); });
+$('#showAll').closest('label').title = 'In a module: also the unchanged files and folders, and every module its files link to';
 $('#showLinks').addEventListener('change', e => { showLinks = e.target.checked; renderGraph(); });
 $('#showCycles').addEventListener('change', e => { showCycles = e.target.checked; renderGraph(); });
 const hoverLinks = id => {
