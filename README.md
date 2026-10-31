@@ -1,8 +1,8 @@
-# dyff
+# dyffle
 
 Turn a NestJS or Vue codebase into a JSON graph of modules, files, classes and functions, with each one linked to the exact places it is referenced. Then overlay a pull request on that graph to see what the PR really touches.
 
-For a PR, dyff reports:
+For a PR, dyffle reports:
 
 - every changed symbol (added / modified / removed), with its own slice of the diff
 - **references the PR breaks**: unchanged code that still calls a symbol the PR removed or renamed
@@ -28,14 +28,14 @@ Options API members (`methods`, `computed`, ...) are not separate nodes: they co
 ## Install
 
 ```sh
-npm install --save-dev @hansvertriest/dyff
+npm install --save-dev dyffle
 ```
 
 Requires Node 18.17+ and git (for `--base-ref`).
 
 ## How it works
 
-dyff works in two layers:
+dyffle works in two layers:
 
 1. **Base index**: the whole codebase on `main`, indexed once (e.g. in CI on every merge) and cached.
 2. **PR overlay**: only the files the PR changed. The whole PR branch is loaded so the type checker can resolve references, but only the changed files are walked. Each changed file is re-indexed in full and compared with its base version, so every symbol gets a `change` status.
@@ -46,34 +46,34 @@ dyff works in two layers:
 
 ```sh
 # On main: index the whole codebase
-dyff index -o base.json
+dyffle index -o base.json
 
 # On the PR branch: index the changed files (diff from the merge base with origin/main)
-dyff overlay --base-ref origin/main -o overlay.json
+dyffle overlay --base-ref origin/main -o overlay.json
 
 # Merge, run the checks, and write a Markdown summary
-dyff merge base.json overlay.json -o merged.json
-dyff report merged.json -o report.md
+dyffle merge base.json overlay.json -o merged.json
+dyffle report merged.json -o report.md
 
 # Or overlay + merge + report in one step
-dyff pr --base base.json --base-ref origin/main -o merged.json --report report.md
+dyffle pr --base base.json --base-ref origin/main -o merged.json --report report.md
 ```
 
 ```sh
 # Look at the result
-dyff serve merged.json                    # interactive PR map on http://127.0.0.1:4173
-dyff html merged.json -o pr-map.html      # the same page as one self-contained file
-dyff report merged.json --map             # Markdown with a Mermaid module map (renders on GitHub)
+dyffle serve merged.json                    # interactive PR map on http://127.0.0.1:4173
+dyffle html merged.json -o pr-map.html      # the same page as one self-contained file
+dyffle report merged.json --map             # Markdown with a Mermaid module map (renders on GitHub)
 
-# Keep a dyff section up to date inside a PR description
+# Keep a dyffle section up to date inside a PR description
 gh pr view 12 --json body -q .body > body.md
-dyff report merged.json --map --embed-in body.md -o body.md
+dyffle report merged.json --map --embed-in body.md -o body.md
 gh pr edit 12 --body-file body.md
 ```
 
-`--embed-in` places the report between `<!-- dyff:start -->` and `<!-- dyff:end -->` markers: an earlier dyff section is replaced, the rest of the description is kept.
+`--embed-in` places the report between `<!-- dyffle:start -->` and `<!-- dyffle:end -->` markers: an earlier dyffle section is replaced, the rest of the description is kept.
 
-Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for stdin (for example `gh pr diff 123 | dyff overlay --diff -`). The working tree must be the PR's head, and diff paths must be relative to `--root`. dyff rebuilds the base version of each changed file by reverse-applying the diff.
+Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for stdin (for example `gh pr diff 123 | dyffle overlay --diff -`). The working tree must be the PR's head, and diff paths must be relative to `--root`. dyffle rebuilds the base version of each changed file by reverse-applying the diff.
 
 | Option | |
 | --- | --- |
@@ -91,36 +91,36 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 `serve` and `html` also take several merged indexes, and the page gets a commit picker (← → and a list) to switch between them. You stay on the same module or folder when it exists in the other one. Each is listed under its file name, in the order given. For example, every commit of a branch against its parent:
 
 ```sh
-git checkout -q main && dyff index -q -o base.json
+git checkout -q main && dyffle index -q -o base.json
 files=()
 for c in $(git rev-list --reverse main..feature); do
   git checkout -q $c
   f="$(git log -1 --format='%h %s' | tr '/' '-').json"
-  dyff pr -q --base base.json --base-ref "$c^" -o "$f" && files+=("$f")
-  dyff index -q -o base.json
+  dyffle pr -q --base base.json --base-ref "$c^" -o "$f" && files+=("$f")
+  dyffle index -q -o base.json
 done
 git checkout -q feature
-dyff serve "${files[@]}"
+dyffle serve "${files[@]}"
 ```
 
 ### Review comments
 
-In `dyff serve` or a `dyff html` page, hover any diff line and click **+** to comment on it. The summary lists your comments and has a box for an overall comment. Comments stay in your browser, per head commit, until you delete them.
+In `dyffle serve` or a `dyffle html` page, hover any diff line and click **+** to comment on it. The summary lists your comments and has a box for an overall comment. Comments stay in your browser, per head commit, until you delete them.
 
-**Download comments** saves a JSON file that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyff.context` list with each comment's line of code and symbol. Hand it to Claude to put on the PR, or post it yourself:
+**Download comments** saves a JSON file that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyffle.context` list with each comment's line of code and symbol. Hand it to Claude to put on the PR, or post it yourself:
 
 ```sh
-gh api repos/{owner}/{repo}/pulls/12/reviews --input dyff-review-1a2b3c4.json
+gh api repos/{owner}/{repo}/pulls/12/reviews --input dyffle-review-1a2b3c4.json
 ```
 
 The file has no `event`, so GitHub creates a pending review that you submit from the PR page.
 
 ### In CI: a PR map in every PR description (GitHub Actions)
 
-Add dyff as a dev dependency (`npm install --save-dev @hansvertriest/dyff`), then add `.github/workflows/dyff.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyff section in the PR description up to date, and attaches the interactive page to the run:
+Add dyffle as a dev dependency (`npm install --save-dev dyffle`), then add `.github/workflows/dyffle.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyffle section in the PR description up to date, and attaches the interactive page to the run:
 
 ```yaml
-name: dyff PR map
+name: dyffle PR map
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -128,7 +128,7 @@ permissions:
   contents: read
   pull-requests: write
 concurrency:
-  group: dyff-${{ github.event.pull_request.number }}
+  group: dyffle-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -152,15 +152,15 @@ jobs:
           base_sha=$(git merge-base "$BASE_REF" HEAD)
           git worktree add --detach "$RUNNER_TEMP/base" "$base_sha"
           ln -s "$PWD/node_modules" "$RUNNER_TEMP/base/node_modules"
-          npx dyff index --root "$RUNNER_TEMP/base" -o "$RUNNER_TEMP/base.json"
-          npx dyff pr --base "$RUNNER_TEMP/base.json" --base-ref "$BASE_REF" -o "$RUNNER_TEMP/merged.json"
+          npx dyffle index --root "$RUNNER_TEMP/base" -o "$RUNNER_TEMP/base.json"
+          npx dyffle pr --base "$RUNNER_TEMP/base.json" --base-ref "$BASE_REF" -o "$RUNNER_TEMP/merged.json"
           mkdir -p "$RUNNER_TEMP/page"
-          npx dyff html "$RUNNER_TEMP/merged.json" -o "$RUNNER_TEMP/page/dyff-pr-${{ github.event.pull_request.number }}.html"
+          npx dyffle html "$RUNNER_TEMP/merged.json" -o "$RUNNER_TEMP/page/dyffle-pr-${{ github.event.pull_request.number }}.html"
 
       - id: upload
         uses: actions/upload-artifact@v7
         with:
-          path: ${{ runner.temp }}/page/dyff-pr-${{ github.event.pull_request.number }}.html
+          path: ${{ runner.temp }}/page/dyffle-pr-${{ github.event.pull_request.number }}.html
           archive: false
           overwrite: true
 
@@ -171,7 +171,7 @@ jobs:
           MAP_URL: ${{ steps.upload.outputs.artifact-url }}
         run: |
           gh api "$PR_URL" --jq '.body // ""' > "$RUNNER_TEMP/body.md"
-          npx dyff report "$RUNNER_TEMP/merged.json" --map --link "$MAP_URL" \
+          npx dyffle report "$RUNNER_TEMP/merged.json" --map --link "$MAP_URL" \
             --embed-in "$RUNNER_TEMP/body.md" -o "$RUNNER_TEMP/new-body.md"
           if ! cmp -s "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/new-body.md"; then
             gh api -X PATCH "$PR_URL" -F "body=@$RUNNER_TEMP/new-body.md" --silent
@@ -183,7 +183,7 @@ For large codebases, build the base index once per merge to `main` and download 
 ## API
 
 ```ts
-import { buildBaseIndex, buildOverlay, merge, markdownReport } from '@hansvertriest/dyff';
+import { buildBaseIndex, buildOverlay, merge, markdownReport } from 'dyffle';
 
 const base = buildBaseIndex({ root: '/path/to/repo' });
 const overlay = buildOverlay({ root: '/path/to/repo', baseRef: 'origin/main' });

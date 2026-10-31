@@ -14,7 +14,7 @@ const label = (s: string) => s.replace(/"/g, '#quot;').replace(/[<>]/g, '');
  */
 export function mermaidModuleMap(index: Index, opts: MermaidOptions = {}): string {
   const c = index.checks;
-  if (!c) throw new Error('The module map needs a merged index (dyff merge or dyff pr).');
+  if (!c) throw new Error('The module map needs a merged index (dyffle merge or dyffle pr).');
   const max = opts.maxNodes ?? 30;
 
   const stats = new Map<string, { adds: number; dels: number; statuses: Set<string> }>();

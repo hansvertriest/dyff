@@ -8,16 +8,16 @@ import { embedSection, markdownReport } from './report.js';
 import { serve, standaloneHtml } from './serve.js';
 import type { Index } from './schema.js';
 
-const HELP = `dyff: map NestJS and Vue pull requests onto a codebase graph
+const HELP = `dyffle: map NestJS and Vue pull requests onto a codebase graph
 
 Usage
-  dyff index   [project options] [-o base.json]
-  dyff overlay (--base-ref <ref> | --diff <file|->) [project options] [-o overlay.json]
-  dyff merge   <base.json> <overlay.json> [--depth N] [-o merged.json]
-  dyff pr      --base <base.json> (--base-ref <ref> | --diff <file|->) [project options] [-o merged.json] [--report report.md]
-  dyff report  <merged.json> [--map] [--link <url>] [--embed-in <body.md>] [--limit N] [-o report.md]
-  dyff html    <merged.json>... [-o pr-map.html]
-  dyff serve   <merged.json>... [--port 4173] [--host 127.0.0.1]
+  dyffle index   [project options] [-o base.json]
+  dyffle overlay (--base-ref <ref> | --diff <file|->) [project options] [-o overlay.json]
+  dyffle merge   <base.json> <overlay.json> [--depth N] [-o merged.json]
+  dyffle pr      --base <base.json> (--base-ref <ref> | --diff <file|->) [project options] [-o merged.json] [--report report.md]
+  dyffle report  <merged.json> [--map] [--link <url>] [--embed-in <body.md>] [--limit N] [-o report.md]
+  dyffle html    <merged.json>... [-o pr-map.html]
+  dyffle serve   <merged.json>... [--port 4173] [--host 127.0.0.1]
 
 Commands
   index     Index the whole codebase (run on main): modules, files, classes,
@@ -31,7 +31,7 @@ Commands
   report    Markdown summary of a merged index, for a PR comment or description.
             --map adds a Mermaid module map, --link a link to the interactive
             page. --embed-in <file> prints that file with the report placed
-            between dyff markers (replacing an earlier report), for updating
+            between dyffle markers (replacing an earlier report), for updating
             a PR description in place.
   html      The interactive page as one self-contained HTML file.
   serve     Open a merged index in the browser: folder map, review checks,
@@ -108,7 +108,7 @@ async function main(argv: string[]): Promise<void> {
     if (!args.length) throw new UsageError('Missing merged index path.');
     return args.map((p) => {
       const index = readIndex(p, 'merged index path');
-      if (!index.checks) throw new UsageError(`${what} needs merged indexes (output of dyff merge or dyff pr); ${p} is not one.`);
+      if (!index.checks) throw new UsageError(`${what} needs merged indexes (output of dyffle merge or dyffle pr); ${p} is not one.`);
       return { label: basename(p).replace(/\.json$/i, ''), index };
     });
   };
@@ -147,7 +147,7 @@ async function main(argv: string[]): Promise<void> {
     case 'serve': {
       const list = readMerged('serve').map((x) => ({ label: x.label, index: JSON.stringify(x.index) }));
       const { url } = await serve(list.length === 1 ? list[0].index : list, { port: v.port ? Number(v.port) : undefined, host: v.host });
-      process.stderr.write(`dyff viewer running at ${url}  (Ctrl+C to stop)\n`);
+      process.stderr.write(`dyffle viewer running at ${url}  (Ctrl+C to stop)\n`);
       break;
     }
     case 'report': {
@@ -173,7 +173,7 @@ class UsageError extends Error {}
 
 main(process.argv.slice(2)).catch((e) => {
   const err = e as Error & { code?: string };
-  process.stderr.write(`dyff: ${err.message}\n`);
-  if (e instanceof UsageError || err.code?.startsWith('ERR_PARSE_ARGS')) process.stderr.write('Run "dyff --help" for usage.\n');
+  process.stderr.write(`dyffle: ${err.message}\n`);
+  if (e instanceof UsageError || err.code?.startsWith('ERR_PARSE_ARGS')) process.stderr.write('Run "dyffle --help" for usage.\n');
   process.exit(1);
 });

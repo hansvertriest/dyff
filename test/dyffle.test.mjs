@@ -10,7 +10,7 @@ import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, merm
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
 const git = (cwd, ...args) =>
-  execFileSync('git', ['-c', 'user.name=dyff', '-c', 'user.email=dyff@example.com', ...args], { cwd, encoding: 'utf8' });
+  execFileSync('git', ['-c', 'user.name=dyffle', '-c', 'user.email=dyffle@example.com', ...args], { cwd, encoding: 'utf8' });
 
 describe('diff', () => {
   const diff = [
@@ -64,7 +64,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
   const node = (index, id) => index.nodes.find((n) => n.id === id);
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
     cpSync(join(fixture, 'base'), dir, { recursive: true });
     git(dir, 'init', '-q', '-b', 'main');
     git(dir, 'add', '-A');
@@ -157,7 +157,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
   });
 
   it('finds references the PR broke', () => {
-    // A .json import is a use of a file dyff never indexes; it is not broken.
+    // A .json import is a use of a file dyffle never indexes; it is not broken.
     assert.ok(node(merged, 'src/reports/report-labels.ts#reportTitle').uses.includes('src/reports/report-labels.json'));
     assert.deepEqual(
       merged.checks.danglingReferences.map((d) => [d.from, d.to]),
@@ -229,26 +229,29 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
 
   it('embeds the report in a PR description and replaces it on later runs', () => {
     const first = embedSection('My description\n', 'report v1');
-    assert.equal(first, 'My description\n\n---\n\n<!-- dyff:start -->\nreport v1\n<!-- dyff:end -->\n');
+    assert.equal(first, 'My description\n\n---\n\n<!-- dyffle:start -->\nreport v1\n<!-- dyffle:end -->\n');
     const edited = first + '\nA note added later';
     assert.equal(embedSection(edited, 'report v2'), edited.replace('report v1', 'report v2'));
-    assert.equal(embedSection('', 'r'), '<!-- dyff:start -->\nr\n<!-- dyff:end -->\n');
+    assert.equal(embedSection('', 'r'), '<!-- dyffle:start -->\nr\n<!-- dyffle:end -->\n');
     // Markers mentioned inline are not section boundaries.
-    const mention = 'Sits between `<!-- dyff:start -->` / `<!-- dyff:end -->`.';
-    assert.equal(embedSection(mention, 'r'), mention + '\n\n---\n\n<!-- dyff:start -->\nr\n<!-- dyff:end -->\n');
+    const mention = 'Sits between `<!-- dyffle:start -->` / `<!-- dyffle:end -->`.';
+    assert.equal(embedSection(mention, 'r'), mention + '\n\n---\n\n<!-- dyffle:start -->\nr\n<!-- dyffle:end -->\n');
     // Descriptions edited on github.com use CRLF line endings.
-    const crlf = 'Intro\r\n\r\n<!-- dyff:start -->\r\nold\r\n<!-- dyff:end -->\r\nOutro';
-    assert.equal(embedSection(crlf, 'new'), 'Intro\r\n\r\n<!-- dyff:start -->\nnew\n<!-- dyff:end -->\r\nOutro');
+    const crlf = 'Intro\r\n\r\n<!-- dyffle:start -->\r\nold\r\n<!-- dyffle:end -->\r\nOutro';
+    assert.equal(embedSection(crlf, 'new'), 'Intro\r\n\r\n<!-- dyffle:start -->\nnew\n<!-- dyffle:end -->\r\nOutro');
+    // A section from before the rename to dyffle is replaced, not duplicated.
+    const old = 'Intro\n\n<!-- dyff:start -->\nold\n<!-- dyff:end -->\nOutro';
+    assert.equal(embedSection(old, 'new'), 'Intro\n\n<!-- dyffle:start -->\nnew\n<!-- dyffle:end -->\nOutro');
   });
 
   it('exports the viewer as one self-contained HTML file', () => {
     const html = standaloneHtml(merged);
-    assert.match(html, /<script>window\.DYFF_DATA = \{/);
-    assert.ok(!html.slice(html.indexOf('DYFF_DATA'), html.indexOf('</script>', html.indexOf('DYFF_DATA'))).includes('<'));
+    assert.match(html, /<script>window\.DYFFLE_DATA = \{/);
+    assert.ok(!html.slice(html.indexOf('DYFFLE_DATA'), html.indexOf('</script>', html.indexOf('DYFFLE_DATA'))).includes('<'));
   });
 
   it('serves several merged indexes to switch between', async () => {
-    assert.match(standaloneHtml([{ label: 'a', index: merged }, { label: 'b', index: merged }]), /<script>window\.DYFF_LIST = \[\{"label":"a","index":\{/);
+    assert.match(standaloneHtml([{ label: 'a', index: merged }, { label: 'b', index: merged }]), /<script>window\.DYFFLE_LIST = \[\{"label":"a","index":\{/);
     const { server, url } = await serve([{ label: 'one', index: '{"n":1}' }, { label: 'two', index: '{"n":2}' }], { port: 0 });
     try {
       const get = async (p) => { const r = await fetch(url + p); return r.ok ? r.json() : r.status; };
@@ -274,7 +277,7 @@ describe('cycles that exist before the PR', () => {
   after(() => rmSync(dir, { recursive: true, force: true }));
 
   it('does not report an existing cycle as new when the PR removes one of its modules', () => {
-    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
     const write = (path, text) => {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), text);
@@ -322,7 +325,7 @@ describe('circular file imports', () => {
   after(() => rmSync(dir, { recursive: true, force: true }));
 
   it('finds new and existing cycles, follows renames and skips type-only imports', () => {
-    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
     const write = (path, text) => {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
       writeFileSync(join(dir, path), text);
@@ -355,7 +358,7 @@ describe('circular file imports', () => {
 
 describe('files with syntax errors', () => {
   it('indexes a file whose import has no string specifier', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
     try {
       writeFileSync(join(dir, 'a.ts'), 'export const a = 1;\n');
       writeFileSync(join(dir, 'b.ts'), "import { a } from ./a';\nexport const b = a;\n");
@@ -373,7 +376,7 @@ describe('Vue fixture: single-file components and vue-router routes', () => {
   const node = (index, id) => index.nodes.find((n) => n.id === id);
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
     cpSync(join(vueFixture, 'base'), dir, { recursive: true });
     git(dir, 'init', '-q', '-b', 'main');
     git(dir, 'add', '-A');

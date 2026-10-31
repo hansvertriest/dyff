@@ -24,7 +24,7 @@ export function routeLabel(route: Route, globalPrefix?: string): string {
 /** Markdown summary of a merged index, meant for a PR comment. */
 export function markdownReport(index: Index, opts: ReportOptions = {}): string {
   const c = index.checks;
-  if (!c) throw new Error('The report needs a merged index (dyff merge or dyff pr).');
+  if (!c) throw new Error('The report needs a merged index (dyffle merge or dyffle pr).');
   const limit = opts.limit ?? 25;
   const byId = new Map(index.nodes.map((n) => [n.id, n]));
   const out: string[] = [];
@@ -35,7 +35,7 @@ export function markdownReport(index: Index, opts: ReportOptions = {}): string {
   };
 
   const s = c.summary;
-  out.push(`## ${opts.title ?? 'dyff: PR map'}`, '');
+  out.push(`## ${opts.title ?? 'dyffle: PR map'}`, '');
   out.push(
     `${s.filesChanged} files changed (+${s.additions} −${s.deletions}) · symbols: ${s.symbols.added} added, ${s.symbols.modified} modified, ${s.symbols.removed} removed`,
     '',
@@ -99,19 +99,20 @@ export function markdownReport(index: Index, opts: ReportOptions = {}): string {
   return out.join('\n').trimEnd() + '\n';
 }
 
-export const EMBED_START = '<!-- dyff:start -->';
-export const EMBED_END = '<!-- dyff:end -->';
+export const EMBED_START = '<!-- dyffle:start -->';
+export const EMBED_END = '<!-- dyffle:end -->';
 
 /**
- * Put `section` into `body` between dyff markers: replaces an earlier dyff
+ * Put `section` into `body` between dyffle markers: replaces an earlier dyffle
  * section, or appends one. Everything else in `body` is kept as is. Markers
- * only count on a line of their own, so a description can mention them.
+ * only count on a line of their own, so a description can mention them. A
+ * section from before the rename (`<!-- dyff:start -->`) is replaced too.
  */
 export function embedSection(body: string, section: string): string {
   const block = `${EMBED_START}\n${section.trim()}\n${EMBED_END}`;
-  const start = /^<!-- dyff:start -->\r?$/m.exec(body);
-  const end = start && /^<!-- dyff:end -->\r?$/m.exec(body.slice(start.index));
-  if (start && end) return body.slice(0, start.index) + block + body.slice(start.index + end.index + EMBED_END.length);
+  const start = /^<!-- dyff(?:le)?:start -->\r?$/m.exec(body);
+  const end = start && /^<!-- dyff(?:le)?:end -->(?=\r?$)/m.exec(body.slice(start.index));
+  if (start && end) return body.slice(0, start.index) + block + body.slice(start.index + end.index + end[0].length);
   const rest = body.trimEnd();
   return (rest ? rest + '\n\n---\n\n' : '') + block + '\n';
 }

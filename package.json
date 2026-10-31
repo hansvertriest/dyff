@@ -1,5 +1,5 @@
 {
-  "name": "@hansvertriest/dyff",
+  "name": "dyffle",
   "version": "0.3.0",
   "description": "Index a NestJS or Vue codebase into a symbol/reference graph and overlay pull requests on it: changed symbols, broken callers, affected routes, module cycles and test reach.",
   "keywords": [
@@ -23,7 +23,7 @@
   },
   "type": "module",
   "bin": {
-    "dyff": "dist/cli.js"
+    "dyffle": "dist/cli.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -13,7 +13,7 @@ const scriptJson = (x: unknown) => JSON.stringify(x).replace(/</g, '\\u003c').re
 
 /** The viewer as one self-contained HTML file with the index, or several to switch between, embedded. */
 export function standaloneHtml(index: unknown | LabeledIndex[]): string {
-  const data = Array.isArray(index) ? `window.DYFF_LIST = ${scriptJson(index)};` : `window.DYFF_DATA = ${scriptJson(index)};`;
+  const data = Array.isArray(index) ? `window.DYFFLE_LIST = ${scriptJson(index)};` : `window.DYFFLE_DATA = ${scriptJson(index)};`;
   const html = readFileSync(VIEWER, 'utf8');
   const at = html.indexOf('<script>');
   return html.slice(0, at) + `<script>${data}</script>\n` + html.slice(at);

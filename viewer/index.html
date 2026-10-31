@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>dyff PR map</title>
+<title>dyffle PR map</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -333,7 +333,7 @@ details.file>summary.fhead:hover{background:var(--line)}
 <header class="top">
   <h1 class="brand">
     <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="2" width="8" height="6" rx="2" fill="var(--accent)"/><rect x="13" y="8" width="8" height="6" rx="2" fill="var(--mod)"/><rect x="1" y="14" width="8" height="6" rx="2" fill="var(--edge)"/><path d="M9 5h2a2 2 0 0 1 2 2v2M9 17h2a2 2 0 0 0 2-2v-2" stroke="var(--edge)" stroke-width="1.5" fill="none"/></svg>
-    dyff
+    dyffle
   </h1>
   <p class="prtitle" id="prTitle"></p>
   <div class="commits" id="commits" hidden>
@@ -1038,12 +1038,14 @@ function renderSummary() {
 }
 
 /* ---------- Review comments ---------- */
-// Kept in this browser per head commit, so they survive reloads and a new `dyff serve`.
+/** A stored value, falling back to its key from before the rename to dyffle. */
+const stored = key => localStorage.getItem(key) ?? localStorage.getItem(key.replace(/^dyffle-/, 'dyff-'));
+// Kept in this browser per head commit, so they survive reloads and a new `dyffle serve`.
 let review = { body: '', comments: [] };
-const reviewKey = () => 'dyff-review:' + (D.pr?.headCommit || D.root);
+const reviewKey = () => 'dyffle-review:' + (D.pr?.headCommit || D.root);
 function loadReview() {
   try {
-    const r = JSON.parse(localStorage.getItem(reviewKey()) || 'null');
+    const r = JSON.parse(stored(reviewKey()) || 'null');
     if (r && Array.isArray(r.comments)) review = { body: String(r.body || ''), comments: r.comments };
   } catch { /* storage unavailable */ }
   updateReviewButton();
@@ -1118,7 +1120,7 @@ function downloadReview() {
     ...(pr.headCommit ? { commit_id: pr.headCommit } : {}),
     ...(review.body.trim() ? { body: review.body.trim() } : {}),
     comments: cs.map(c => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
-    dyff: {
+    dyffle: {
       root: D.root,
       ...(pr.baseRef ? { baseRef: pr.baseRef } : {}),
       ...(pr.baseCommit ? { baseCommit: pr.baseCommit } : {}),
@@ -1129,7 +1131,7 @@ function downloadReview() {
   };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' }));
-  a.download = `dyff-review${pr.headCommit ? '-' + pr.headCommit.slice(0, 7) : ''}.json`;
+  a.download = `dyffle-review${pr.headCommit ? '-' + pr.headCommit.slice(0, 7) : ''}.json`;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
@@ -1162,11 +1164,11 @@ $('#dlReview').addEventListener('click', downloadReview);
 /* ---------- Viewed files ---------- */
 // Changed files marked viewed, kept in this browser per head commit like the review comments.
 let viewed = new Set();
-const viewedKey = () => 'dyff-viewed:' + (D.pr?.headCommit || D.root);
+const viewedKey = () => 'dyffle-viewed:' + (D.pr?.headCommit || D.root);
 function loadViewed() {
   viewed = new Set();
   try {
-    const v = JSON.parse(localStorage.getItem(viewedKey()) || 'null');
+    const v = JSON.parse(stored(viewedKey()) || 'null');
     if (Array.isArray(v)) viewed = new Set(v);
   } catch { /* storage unavailable */ }
 }
@@ -1376,7 +1378,7 @@ function closeSide() {
 // resets it. The widths are remembered in this browser and shrink to leave the map some room.
 const MIN_W = 280, MAP_MIN = 320, DEFAULT_W = { w1: 500, w2: 440 };
 let widths = { ...DEFAULT_W };
-try { Object.assign(widths, JSON.parse(localStorage.getItem('dyff-widths') || '{}')); } catch { /* storage unavailable */ }
+try { Object.assign(widths, JSON.parse(stored('dyffle-widths') || '{}')); } catch { /* storage unavailable */ }
 function applyWidths() {
   let { w1, w2 } = widths;
   const room = window.innerWidth - MAP_MIN, total = side ? w1 + w2 : w1;
@@ -1388,7 +1390,7 @@ function applyWidths() {
 }
 function setWidth(key, w) {
   widths[key] = Math.max(MIN_W, Math.round(w));
-  try { localStorage.setItem('dyff-widths', JSON.stringify(widths)); } catch { /* storage unavailable */ }
+  try { localStorage.setItem('dyffle-widths', JSON.stringify(widths)); } catch { /* storage unavailable */ }
   applyWidths();
 }
 for (const [id, key] of [['#gut1', 'w1'], ['#gut2', 'w2']]) {
@@ -1532,8 +1534,8 @@ function title() {
 // Several merged indexes (e.g. one per commit) come as a list of labels; one of them is shown at a time.
 let indexes = null, current = 0;
 const fetchJson = u => fetch(u).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
-const loadIndex = i => window.DYFF_LIST ? Promise.resolve(window.DYFF_LIST[i].index)
-  : window.DYFF_DATA ? Promise.resolve(window.DYFF_DATA) : fetchJson(indexes ? `index.json?i=${i}` : 'index.json');
+const loadIndex = i => window.DYFFLE_LIST ? Promise.resolve(window.DYFFLE_LIST[i].index)
+  : window.DYFFLE_DATA ? Promise.resolve(window.DYFFLE_DATA) : fetchJson(indexes ? `index.json?i=${i}` : 'index.json');
 const failed = err => { $('#pin').innerHTML = `<p class="empty">Could not load index.json (${esc(err.message)}).</p>`; };
 /** The view to keep after switching index, when what it shows still exists there. */
 function keptView(v) {
@@ -1545,10 +1547,10 @@ function keptView(v) {
 function useIndex(data) {
   const prev = D ? view : null;
   D = data;
-  if (!D.checks) { $('#pin').innerHTML = '<p class="empty">This index has no PR checks. Serve the output of <code>dyff merge</code> or <code>dyff pr</code>.</p>'; return; }
+  if (!D.checks) { $('#pin').innerHTML = '<p class="empty">This index has no PR checks. Serve the output of <code>dyffle merge</code> or <code>dyffle pr</code>.</p>'; return; }
   const pr = D.pr || {};
   $('#prTitle').innerHTML = `${esc(baseOf(D.root))} · ${esc(title())}${pr.headCommit ? `<small>${esc(pr.baseCommit?.slice(0, 7) || '')}…${esc(pr.headCommit.slice(0, 7))}</small>` : ''}`;
-  document.title = `dyff · ${baseOf(D.root)}`;
+  document.title = `dyffle · ${baseOf(D.root)}`;
   review = { body: '', comments: [] };
   loadReview();
   loadViewed();
@@ -1579,7 +1581,7 @@ function showIndex(i) {
 }
 $('#commitSel').addEventListener('change', e => showIndex(Number(e.target.value)));
 $('#commits').addEventListener('click', e => { const b = e.target.closest('[data-step]'); if (b) showIndex(current + Number(b.dataset.step)); });
-(window.DYFF_LIST ? Promise.resolve(window.DYFF_LIST.map(x => x.label)) : window.DYFF_DATA ? Promise.resolve(null) : fetch('indexes.json').then(r => r.ok ? r.json() : null, () => null))
+(window.DYFFLE_LIST ? Promise.resolve(window.DYFFLE_LIST.map(x => x.label)) : window.DYFFLE_DATA ? Promise.resolve(null) : fetch('indexes.json').then(r => r.ok ? r.json() : null, () => null))
   .then(labels => { indexes = labels && labels.length > 1 ? labels : null; renderCommits(); return loadIndex(0); })
   .then(useIndex).catch(failed);
 })();
