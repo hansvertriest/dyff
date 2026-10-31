@@ -34,7 +34,7 @@ Commands
             between dyff markers (replacing an earlier report), for updating
             a PR description in place.
   html      The interactive page as one self-contained HTML file.
-  serve     Open a merged index in the browser: module map, review checks,
+  serve     Open a merged index in the browser: folder map, review checks,
             changed symbols with their diffs, callers and routes.
             html and serve take several merged indexes too, e.g. one per
             commit, and the page switches between them. Each is listed

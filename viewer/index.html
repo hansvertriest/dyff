@@ -103,6 +103,8 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .node .nm{font:600 14px var(--sans);fill:var(--ink)}
 .node .fold{fill:none;stroke:var(--muted);stroke-width:1.4;stroke-linejoin:round}
 .node .pth{font:12px var(--mono);fill:var(--muted)}
+.node .tag{font:600 10.5px var(--sans);fill:var(--mod);letter-spacing:.03em}
+.node .tag .p{fill:var(--l-cyc)} .node .tag .x{fill:var(--l-cyc-new)}
 .node.ext rect.box{fill:none;stroke-dasharray:2 3}
 .crumbs{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);width:100%}
 .crumbs b{color:var(--ink);font-weight:600}
@@ -116,6 +118,7 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .edge.rem{stroke:var(--l-rem);stroke-dasharray:6 4;stroke-width:2}
 .edge.cyc{stroke:var(--l-cyc);stroke-width:1.8}
 .edge.cyc-new{stroke:var(--l-cyc-new);stroke-width:2.4}
+.edge.cyc-in{stroke:var(--l-cyc-new);stroke-width:1.6;opacity:.45}
 .edge.ctx{display:none}
 .edge.ctx.on{display:inline}
 .dim{opacity:.22}
@@ -314,7 +317,7 @@ details.file>summary.fhead:hover{background:var(--line)}
       <nav class="crumbs" id="crumbs" aria-label="Map level" hidden></nav>
       <button class="iconbtn mobile-only" id="optsBtn" type="button" aria-expanded="false" aria-controls="opts" aria-label="Map options"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h8m4 0h2M2 13h2m4 0h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="5" r="2" stroke="currentColor" stroke-width="1.6" fill="none"/><circle cx="6" cy="13" r="2" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></button>
       <div class="opts" id="opts">
-      <label class="toggle" id="allWrap"><input type="checkbox" id="showAll"> Show all modules</label>
+      <label class="toggle" id="allWrap"><input type="checkbox" id="showAll"> Show unchanged files</label>
       <label class="toggle"><input type="checkbox" id="showLinks"> Show all links</label>
       <label class="toggle"><input type="checkbox" id="showCycles"> Show existing cycles</label>
       <label class="toggle"><input type="checkbox" id="showTests"> Count test files</label>
@@ -354,7 +357,7 @@ const baseOf = p => p.slice(p.lastIndexOf('/') + 1);
 const short = id => id.includes('#') ? id.slice(id.indexOf('#') + 1) : baseOf(id);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-let D, byId, modById, fileByPath, nodesByFile, M, FG, zoom = null, folder = null;
+let D, byId, modById, fileByPath, nodesByFile, M, FG, folder = '', projectRoot = '';
 let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, history = [];
 
 /* ---------- Model ---------- */
@@ -364,6 +367,7 @@ function build() {
   for (const n of D.nodes) { if (!nodesByFile.has(n.file)) nodesByFile.set(n.file, []); nodesByFile.get(n.file).push(n); }
   FG = null;
   moduleRoots.clear(); compacted.clear();
+  projectRoot = commonDir(D.files.map(f => f.path));
   modById = new Map(D.modules.map(m => [m.id, m]));
   fileByPath = new Map(D.files.map(f => [f.path, f]));
   const C = D.checks;
@@ -400,31 +404,36 @@ function build() {
     n.state = !n.changed ? 'none' : n.files.every(f => f.change.status === 'added') ? 'added' : n.files.every(f => f.change.status === 'removed') ? 'removed' : 'modified';
     n.affected = !n.changed && affected.has(n.id);
   }
-  M = { nodes, edges };
+  M = { nodes, edges, cycleState };
 }
 
-/* ---------- Folders and files inside a module ---------- */
-// The map walks a module's folder tree one level at a time. Each file goes to its nearest box at
-// the current folder: itself, a subfolder (a chain of single-child folders is one box), a folder
-// elsewhere in the module, or its module when it is in another one.
+/* ---------- The folder map ---------- */
+// The map walks the project's folder tree one level at a time. Each file goes to its nearest box at
+// the current folder: itself, a subfolder (a chain of single-child folders is one box), or the folder
+// elsewhere in the project where its path leaves the current one. moduleLayer adds the modules on top.
 const moduleRoots = new Map(), compacted = new Map();
 const under = (path, dir) => !dir || path.startsWith(dir + '/');
 const relTo = (path, dir) => dir ? path.slice(dir.length + 1) : path;
-/** The deepest folder that holds all of a module's files. */
+/** The deepest folder that holds all these files. */
+function commonDir(paths) {
+  const dirs = paths.map(p => dirOf(p).split('/'));
+  let common = dirs[0] || [];
+  for (const d of dirs) { let k = 0; while (k < common.length && common[k] === d[k]) k++; common = common.slice(0, k); }
+  return common.join('/');
+}
+/** A module's folder: the one with its module file, or the one that holds all of its files. */
 function moduleRoot(mod) {
   if (!moduleRoots.has(mod)) {
-    const dirs = D.files.filter(f => f.module === mod).map(f => dirOf(f.path).split('/'));
-    let common = dirs[0] || [];
-    for (const d of dirs) { let k = 0; while (k < common.length && common[k] === d[k]) k++; common = common.slice(0, k); }
-    moduleRoots.set(mod, common.join('/'));
+    const m = modById.get(mod);
+    moduleRoots.set(mod, m?.file ? dirOf(m.file) : commonDir(D.files.filter(f => f.module === mod).map(f => f.path)));
   }
   return moduleRoots.get(mod);
 }
 /** A folder, extended through subfolders as long as it holds only one subfolder and no files. */
-function compact(mod, dir) {
-  const key = `${mod}|${showTests}|${dir}`;
+function compact(dir) {
+  const key = `${showTests}|${dir}`;
   if (compacted.has(key)) return compacted.get(key);
-  const files = D.files.filter(f => f.module === mod && (showTests || !f.test)).map(f => f.path);
+  const files = D.files.filter(f => showTests || !f.test).map(f => f.path);
   let d = dir;
   for (;;) {
     const inside = files.filter(p => under(p, d));
@@ -435,22 +444,22 @@ function compact(mod, dir) {
   compacted.set(key, d);
   return d;
 }
-function fileGraph(mod, folder) {
-  const nodes = new Map(), edges = new Map(), root = moduleRoot(mod);
+const folderName = dir => dir === projectRoot ? baseOf(D.root) : relTo(dir, projectRoot) + '/';
+function fileGraph(folder) {
+  const nodes = new Map(), edges = new Map();
   const shown = f => f && (showTests || !f.test);
   const keyOf = path => {
     const f = fileByPath.get(path);
     if (!f) return null;
-    if (f.module !== mod) return 'mod:' + f.module;
     if (under(path, folder)) {
       const rest = relTo(path, folder), i = rest.indexOf('/');
-      return i < 0 ? path : 'dir:' + compact(mod, (folder ? folder + '/' : '') + rest.slice(0, i));
+      return i < 0 ? path : 'dir:' + compact((folder ? folder + '/' : '') + rest.slice(0, i));
     }
     // Outside the current folder: the folder (or file) where its path leaves the current one.
     const a = folder.split('/'), b = path.split('/');
     let k = 0;
     while (k < a.length && k < b.length - 1 && a[k] === b[k]) k++;
-    return k === b.length - 1 ? path : 'dir:' + compact(mod, b.slice(0, k + 1).join('/'));
+    return k === b.length - 1 ? path : 'dir:' + compact(b.slice(0, k + 1).join('/'));
   };
   const warns = new Map();
   for (const d of D.checks.danglingReferences) { const f = byId.get(d.from)?.file; if (f) warns.set(f, (warns.get(f) || 0) + 1); }
@@ -462,14 +471,14 @@ function fileGraph(mod, folder) {
     return 'modified';
   };
   for (const f of D.files) {
-    if (f.module !== mod || !shown(f)) continue;
+    if (!shown(f)) continue;
     const k = keyOf(f.path);
     let n = nodes.get(k);
     if (!n) {
       const outside = !under(f.path, folder), dir = k.startsWith('dir:') ? k.slice(4) : null;
       n = { id: k, files: [], ext: outside, outside, out: new Map(), inn: new Set() };
-      if (dir) Object.assign(n, { dir, name: relTo(dir, outside ? root : folder) + '/', sub: outside ? `Elsewhere in ${modName(mod)}` : dir + '/' });
-      else Object.assign(n, { file: f, name: baseOf(f.path), sub: under(dirOf(f.path), root) && dirOf(f.path) !== root ? relTo(dirOf(f.path), root) + '/' : (dirOf(f.path) || '.') + '/' });
+      if (dir) Object.assign(n, { dir, name: outside ? folderName(dir) : relTo(dir, folder) + '/', sub: outside ? 'Elsewhere' : dir + '/' });
+      else Object.assign(n, { file: f, name: baseOf(f.path), sub: (dirOf(f.path) || '.') + '/' });
       nodes.set(k, n);
     }
     n.files.push(f);
@@ -484,12 +493,19 @@ function fileGraph(mod, folder) {
     n.dels = fs.reduce((a, f) => a + (f.change?.deletions || 0), 0);
     n.warn = fs.reduce((a, f) => a + (warns.get(f.path) || 0), 0);
   }
-  const ext = m => {
-    const k = 'mod:' + m;
-    if (!nodes.has(k)) nodes.set(k, { id: k, ext: true, mod: m, name: modName(m), sub: m, changed: false, state: 'none', affected: false, adds: 0, dels: 0, warn: 0, out: new Map(), inn: new Set() });
-    return k;
+  // A link between two boxes stands for all file imports between them; each import is a pair, seen
+  // now (after the PR) and/or before it.
+  const link = (a, b, pk, side, extra) => {
+    // Links between two boxes outside the current folder belong to another level.
+    if (!a || !b || a === b || !nodes.has(a) || !nodes.has(b) || (nodes.get(a).outside && nodes.get(b).outside)) return;
+    const k = a + '>' + b;
+    let e = edges.get(k);
+    if (!e) edges.set(k, e = { from: a, to: b, pairs: new Map(), typeOnly: true, cycle: false });
+    let pr = e.pairs.get(pk);
+    if (!pr) e.pairs.set(pk, pr = { now: false, before: false, unknown: false, ...extra });
+    pr[side] = true;
+    return e;
   };
-  // A link between two boxes stands for all file imports between them.
   for (const f of D.files) {
     if (!shown(f)) continue;
     const ch = f.change;
@@ -498,66 +514,78 @@ function fileGraph(mod, folder) {
     const sides = [['now', ch?.status === 'removed' ? [] : f.imports], ['before', before || []]];
     for (const [side, list] of sides) for (const im of list) {
       const t = fileByPath.get(im.resolved);
-      if (!shown(t) || (f.module !== mod && t.module !== mod)) continue;
-      const a = f.module === mod ? keyOf(f.path) : ext(f.module), b = t.module === mod ? keyOf(t.path) : ext(t.module);
-      if (a === b) continue;
-      const k = a + '>' + b;
-      let e = edges.get(k);
-      if (!e) edges.set(k, e = { from: a, to: b, pairs: new Map(), typeOnly: true, cycle: false });
-      const pk = f.path + '>' + t.path;
-      let pr = e.pairs.get(pk);
-      if (!pr) e.pairs.set(pk, pr = { now: false, before: false, unknown: !before });
-      pr[side] = true;
-      if (!im.typeOnly) e.typeOnly = false;
+      if (!shown(t)) continue;
+      const e = link(keyOf(f.path), keyOf(t.path), f.path + '>' + t.path, side, { unknown: !before, mods: [f.module, t.module] });
+      if (e && !im.typeOnly) e.typeOnly = false;
     }
   }
+  const G = { folder, tests: showTests, keyOf, nodes, edges, link };
+  moduleLayer(G);
   for (const e of edges.values()) {
     const ps = [...e.pairs.values()];
     e.changed = ps.some(p => p.now && !p.before && !p.unknown);
     e.removed = ps.every(p => p.before && !p.now && !p.unknown);
-    e.files = ps.length;
+    e.files = ps.filter(p => p.mods).length;
+    e.cycle = ps.some(p => p.cycle === 'new') ? 'new' : ps.some(p => p.cycle) ? 'old' : false;
     // Still imports a file this PR deletes: shown like a PR link, it is what breaks.
     e.broken = ps.some(p => p.now) && nodes.get(e.to).state === 'removed';
     nodes.get(e.from).out.set(e.to, e); nodes.get(e.to).inn.add(e.from);
-    if (e.changed || e.removed || e.broken) { nodes.get(e.from).prLink = true; nodes.get(e.to).prLink = true; }
+    if (e.changed || e.removed || e.broken || e.cycle === 'new') { nodes.get(e.from).prLink = true; nodes.get(e.to).prLink = true; }
   }
   // Unchanged boxes in the folder fold into one; visibleIds sets its count.
   nodes.set('rest', { id: 'rest', rest: true, name: '', sub: '', state: 'none', changed: false, affected: false, adds: 0, dels: 0, warn: 0, out: new Map(), inn: new Set() });
-  return { files: true, mod, folder, root, tests: showTests, keyOf, nodes, edges };
+  return G;
 }
-const graph = () => !zoom ? M : FG && FG.mod === zoom && FG.folder === folder && FG.tests === showTests ? FG : (FG = fileGraph(zoom, folder));
-/** The folder to show for a module: the one asked for when it is inside the module, else the module's root. */
-function folderFor(mod, dir) {
-  const root = moduleRoot(mod);
-  return compact(mod, dir !== undefined && dir !== null && under(dir + '/', root) ? dir : root);
+
+/* ---------- Modules on the folder map ---------- */
+// NestJS modules on top of the folder map, from the index's module data (folder groups without a
+// module file, as in Vue projects, add nothing): a box lists the modules whose module file it holds,
+// an @Module import links the boxes of the two module files, and a circular module dependency
+// colors the links between its boxes, or marks the box when the whole cycle is inside it.
+function moduleLayer(G) {
+  const { nodes, edges, keyOf, link } = G, modFile = m => modById.get(m)?.file;
+  for (const n of nodes.values()) n.modules = [];
+  for (const m of D.modules) { const n = m.file && nodes.get(keyOf(m.file)); if (n) n.modules.push(m.id); }
+  for (const e of edges.values()) for (const p of e.pairs.values()) if (p.mods && p.mods[0] !== p.mods[1]) p.cycle = M.cycleState(...p.mods);
+  for (const me of M.edges.values()) {
+    if (!me.kinds.has('module-import') || !modFile(me.from) || !modFile(me.to)) continue;
+    const a = keyOf(modFile(me.from)), b = keyOf(modFile(me.to)), pk = 'mod:' + me.from + '>' + me.to, extra = { cycle: me.cycle };
+    const e = me.removed ? link(a, b, pk, 'before', extra) : link(a, b, pk, 'now', extra);
+    if (!e) continue;
+    if (!me.changed && !me.removed) e.pairs.get(pk).before = true;
+    e.mod = true; e.typeOnly = false;
+    if (me.forwardRef) e.forwardRef = true;
+  }
+  // A circular module dependency inside one box marks the box; opening it shows the cycle.
+  const C = D.checks, newCycle = new Set(C.newCycles.map(c => c.join('|')));
+  for (const c of C.cycles) {
+    const boxes = new Set(c.map(m => keyOf(modFile(m) || D.files.find(f => f.module === m)?.path)));
+    const n = boxes.size === 1 && nodes.get([...boxes][0]);
+    if (n && n.cycle !== 'new') n.cycle = newCycle.has(c.join('|')) ? 'new' : 'old';
+  }
 }
+const graph = () => FG && FG.folder === folder && FG.tests === showTests ? FG : (FG = fileGraph(folder));
+/** The folder to show: the one asked for, or the project's root. */
+const folderFor = dir => compact(dir !== undefined && dir !== null && under(dir + '/', projectRoot) ? dir : projectRoot);
 
 /* ---------- Graph ---------- */
 const W = 232, H = 78, CG = 92, RG = 22, PAD = 28;
 function visibleIds() {
   const G = graph(), ids = new Set();
-  if (G.files) {
-    // What the PR changed, uses changed code or changed a link; the rest of the folder folds into
-    // one box, and other folders and modules show only when the PR changed a link to them.
-    const inside = [...G.nodes.values()].filter(n => !n.ext && !n.rest);
-    const relevant = inside.filter(n => n.changed || n.affected || n.warn || n.prLink);
-    for (const n of showAll || !relevant.length ? inside : relevant) ids.add(n.id);
-    for (const n of G.nodes.values()) if (n.ext && (showAll || n.prLink)) ids.add(n.id);
-  } else {
-    for (const n of G.nodes.values()) if (n.changed) ids.add(n.id);
-    if (showAll || !ids.size) for (const n of G.nodes.values()) ids.add(n.id);
-    else for (const id of [...ids]) { const n = G.nodes.get(id); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
-  }
-  if (selected && G.nodes.has(selected)) { ids.add(selected); if (G.files) { const n = G.nodes.get(selected); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); } }
+  // What the PR changed, uses changed code, changed a link or has a new cycle in it; the rest of the
+  // folder folds into one box, and other folders show only when the PR changed a link to them.
+  const inside = [...G.nodes.values()].filter(n => !n.ext && !n.rest);
+  const relevant = inside.filter(n => n.changed || n.affected || n.warn || n.prLink || n.cycle === 'new');
+  for (const n of showAll || !relevant.length ? inside : relevant) ids.add(n.id);
+  for (const n of G.nodes.values()) if (n.ext && (showAll || n.prLink)) ids.add(n.id);
+  if (selected && G.nodes.has(selected)) { ids.add(selected); const n = G.nodes.get(selected); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
   for (const id of hot) ids.add(id);
-  if (G.files) {
-    const folded = [...G.nodes.values()].filter(n => !n.ext && !n.rest && !ids.has(n.id));
-    if (folded.length) {
-      const r = G.nodes.get('rest'), nf = folded.filter(n => n.dir).length;
-      r.name = `${folded.length} unchanged`;
-      r.sub = nf === folded.length ? plural(nf, 'folder') : nf ? 'files and folders' : plural(folded.length, 'file');
-      ids.add('rest');
-    }
+  const folded = [...G.nodes.values()].filter(n => !n.ext && !n.rest && !ids.has(n.id));
+  if (folded.length) {
+    const r = G.nodes.get('rest'), nf = folded.filter(n => n.dir).length;
+    r.name = `${folded.length} unchanged`;
+    r.sub = nf === folded.length ? plural(nf, 'folder') : nf ? 'files and folders' : plural(folded.length, 'file');
+    ids.add('rest');
   }
   return [...ids].filter(id => G.nodes.has(id));
 }
@@ -599,7 +627,7 @@ function renderGraph() {
   const G = graph();
   renderCrumbs();
   const ids = visibleIds();
-  if (!ids.length) { cv.innerHTML = `<p class="empty">${G.files ? 'No files.' : 'No modules.'}</p>`; return; }
+  if (!ids.length) { cv.innerHTML = '<p class="empty">No files.</p>'; return; }
   const L = layout(ids), { pos, col, bottom } = L;
   boxPos = pos;
   let height = L.height, width = L.width;
@@ -630,10 +658,12 @@ function renderGraph() {
     // cycle is only colored there too: on a big PR they would otherwise cover the whole map.
     const shown = showLinks || near || e.changed || e.removed || e.broken || e.cycle === 'new';
     const cyc = e.cycle === 'new' ? 'new' : e.cycle && (showCycles || near) ? 'old' : false;
-    const cls = ['edge', e.removed ? 'rem' : cyc === 'new' ? 'cyc-new' : cyc ? 'cyc' : e.changed ? 'chg' : '', (G.files ? e.typeOnly : !e.kinds.has('module-import')) ? 'imp' : '', dim ? 'dim' : '', shown ? '' : 'ctx'].join(' ');
+    // In a cycle the PR creates, its new links (the ones that close the cycle) are red; links that
+    // were already there are a faint red.
+    const cls = ['edge', e.removed ? 'rem' : cyc === 'new' ? (e.changed ? 'cyc-new' : 'cyc-in') : cyc ? 'cyc' : e.changed ? 'chg' : '', e.typeOnly ? 'imp' : '', dim ? 'dim' : '', shown ? '' : 'ctx'].join(' ');
     const mk = e.removed ? 'mr' : cyc === 'new' ? 'mx' : cyc ? 'mp' : e.changed ? 'mc' : 'mn';
-    const title = G.files ? `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${e.typeOnly ? 'Type-only import' : 'Import'}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : e.broken ? '\nStill imports a file this PR removes' : ''}`
-      : `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${e.kinds.has('module-import') ? '@Module import' : 'File import only'}${e.forwardRef ? ' (forwardRef)' : ''}${e.cycle === 'new' ? '\nPart of a circular dependency this PR creates' : e.cycle ? '\nPart of a circular dependency that already existed' : ''}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : ''}`;
+    const what = [e.mod && `@Module import${e.forwardRef ? ' (forwardRef)' : ''}`, e.files && `${e.typeOnly ? 'Type-only import' : 'Import'}${e.files > 1 ? ` between ${e.files} files` : ''}`].filter(Boolean).join(', ');
+    const title = `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${what}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : e.broken ? '\nStill imports a file this PR removes' : ''}${e.cycle === 'new' ? (e.changed ? '\nCloses a circular module dependency: remove it to break the cycle' : '\nAlready there, now part of a circular module dependency this PR creates') : e.cycle ? '\nPart of a circular module dependency that already existed' : ''}`;
     eh += `<path class="${cls}" data-a="${esc(e.from)}" data-b="${esc(e.to)}" d="${d}" marker-end="url(#${mk})"><title>${esc(title)}</title></path>`;
   }
   let nh = '';
@@ -642,25 +672,27 @@ function renderGraph() {
     const cls = ['node', 's-' + n.state, n.ext ? 'ext' : '', n.affected ? 'affected' : '', !n.changed && !n.affected ? 'context' : '', id === selected ? 'sel' : '', hot.has(id) && id !== selected ? 'hot' : '', focus && !focus.has(id) ? 'dim' : ''].join(' ');
     const files = n.files ? plural(n.files.length, 'file') : '';
     const meta = n.rest ? (isMobile() ? 'Tap to show' : 'Click to show')
-      : n.ext && !n.dir && !n.file ? 'Other module'
       : n.dir && n.changed ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${n.nChanged} of ${files}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
       : n.dir ? (n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? `Uses changed code · ${files}` : files)
       : n.changed
       ? `<tspan class="a">+${n.adds}</tspan>  <tspan class="d">−${n.dels}</tspan>  ${n.file ? statusWord(n.file.change.status) : plural(n.files.length, 'file')}${n.warn ? `  <tspan class="w">⚠ ${n.warn}</tspan>` : ''}`
       : n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? 'Uses changed code' : 'Unchanged';
-    const target = n.rest ? 'data-action="show-all"' : n.dir ? `data-folder="${esc(n.dir)}"` : n.file ? `data-sym="${esc(id)}"` : `data-mod="${esc(n.ext ? n.mod : id)}"`;
+    const target = n.rest ? 'data-action="show-all"' : n.dir ? `data-folder="${esc(n.dir)}"` : `data-sym="${esc(id)}"`;
+    // Top right: the NestJS modules in the box, and a circular module dependency inside it.
+    const tag = [n.cycle && `<tspan class="${n.cycle === 'new' ? 'x' : 'p'}">⟳ cycle</tspan>`, n.modules?.length && (n.dir && (n.modules.length > 1 || moduleRoot(n.modules[0]) !== n.dir) ? plural(n.modules.length, 'module') : 'module')].filter(Boolean).join('  ');
+    const nameLen = tag ? (n.dir ? 14 : 17) : n.dir ? 22 : 25;
     nh += `<g class="${cls}" data-k="${esc(id)}" ${target} tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}" transform="translate(${p.x},${p.y})">
       <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
-      ${n.dir ? `<path class="fold" d="M18 13h5l2 2h7v8h-14z"/>` : ''}<text class="nm" x="${n.dir ? 38 : 18}" y="25">${esc(n.dir ? clipStart(n.name, 22) : clip(n.name, 25))}</text>
+      ${n.dir ? `<path class="fold" d="M18 13h5l2 2h7v8h-14z"/>` : ''}<text class="nm" x="${n.dir ? 38 : 18}" y="25">${esc(n.dir ? clipStart(n.name, nameLen) : clip(n.name, nameLen))}</text>${tag ? `<text class="tag" x="${W - 12}" y="24" text-anchor="end">${tag}</text>` : ''}
       <text class="pth" x="18" y="44">${esc(clip(n.sub ?? n.id, 29))}</text>
       <text class="meta" x="18" y="64">${meta}</text><title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
-  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="${G.files ? `Files in ${esc(folder || modName(zoom))}` : 'Modules touched by this pull request'}">
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="Files in ${esc(folderName(folder))}">
     <defs>${['mn', 'mc', 'mr', 'mp', 'mx'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r', 'mk-p', 'mk-x'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
     ${eh}${nh}</svg>`;
   cam.w = vw; cam.h = height;
-  const key = `${zoom || ''}|${folder ?? ''}|${vw}x${height}`;
+  const key = `${folder}|${vw}x${height}`;
   if (key !== cam.key) { cam.key = key; fitCam(); }
   else { clampCam(); applyCam(); }
 }
@@ -817,18 +849,12 @@ function panBy(dx, dy) {
 }
 
 function renderCrumbs() {
-  const c = $('#crumbs');
-  c.hidden = !zoom;
-  if (zoom) {
-    // All modules › Module › each folder from the module's root down to the current one.
-    const root = moduleRoot(zoom), segs = folder !== root ? relTo(folder, root).split('/') : [];
-    const parts = [`<button class="linkbtn" data-action="unzoom">All modules</button>`,
-      segs.length ? `<button class="linkbtn" data-folder="${esc(root)}">${esc(modName(zoom))}</button>` : `<b>${esc(modName(zoom))}</b>`,
-      ...segs.map((sg, i) => i === segs.length - 1 ? `<b>${esc(sg)}</b>` : `<button class="linkbtn" data-folder="${esc((root ? root + '/' : '') + segs.slice(0, i + 1).join('/'))}">${esc(sg)}</button>`)];
-    c.innerHTML = parts.join('<span>›</span>');
-    c.scrollLeft = c.scrollWidth;
-  }
-  $('#allWrap').lastChild.textContent = zoom ? ' Show unchanged files and other modules' : ' Show all modules';
+  // The project › each folder from its root down to the current one.
+  const c = $('#crumbs'), segs = folder !== projectRoot ? relTo(folder, projectRoot).split('/') : [];
+  c.hidden = false;
+  c.innerHTML = [segs.length ? `<button class="linkbtn" data-folder="${esc(projectRoot)}">${esc(baseOf(D.root))}</button>` : `<b>${esc(baseOf(D.root))}</b>`,
+    ...segs.map((sg, i) => i === segs.length - 1 ? `<b>${esc(sg)}</b>` : `<button class="linkbtn" data-folder="${esc((projectRoot ? projectRoot + '/' : '') + segs.slice(0, i + 1).join('/'))}">${esc(sg)}</button>`)].join('<span>›</span>');
+  c.scrollLeft = c.scrollWidth;
 }
 
 /* ---------- Panel helpers ---------- */
@@ -906,7 +932,7 @@ function renderSummary() {
     ${changedFiles().map(f => fileSection(f, true)).join('')}
     <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
     ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
-    <p class="foot">Select a module in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Solid arrows are <code>@Module</code> imports, dotted ones are file imports only. Blue arrows are new in this PR, purple ones are part of a cycle that already existed, red ones are removed or part of a cycle this PR creates.</p>`;
+    <p class="foot">Open a folder in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Arrows are imports between files and folders, and <code>@Module</code> imports between the folders of two modules; dotted ones are type-only. Blue arrows are new in this PR, purple ones are part of a circular module dependency that already existed, dark red ones are new links that close a circular module dependency, faint red ones were already there and are now part of one, orange ones are removed. <b>⟳ cycle</b> on a folder: a circular module dependency inside it.</p>`;
 }
 
 /* ---------- Review comments ---------- */
@@ -1079,7 +1105,6 @@ function renderModule(id) {
     <button class="back" data-action="back">← Back</button>
     <h2>${esc(n.name)}</h2><p class="path">${esc(m.file || n.id)}</p>
     <p class="lead">${esc(why)}</p>${declHtml}
-    ${zoom === id ? '' : `<p><button class="linkbtn" data-action="zoom" data-zoom="${esc(id)}">Show its files in the map →</button></p>`}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => symBtn(d.from, ` · uses removed ${esc(symLabel(d.to))}`)).join('')}</div>` : ''}
     ${outs.length ? `<h3>Depends on</h3><div class="chips">${outs.map(e => chip(e, e.to)).join('')}</div>` : ''}
     ${ins.length ? `<h3>Used by</h3><div class="chips">${ins.map(e => chip(e, e.from)).join('')}</div>` : ''}
@@ -1089,17 +1114,17 @@ function renderModule(id) {
 
 /* ---------- Folder ---------- */
 function renderFolder(dir) {
-  const inFolder = D.files.filter(f => f.module === zoom && under(f.path, dir) && (showTests || !f.test));
+  const inFolder = D.files.filter(f => under(f.path, dir) && (showTests || !f.test));
+  const mods = D.modules.filter(m => m.file && under(m.file, dir));
   const changed = inFolder.filter(f => f.change).sort(bySize);
   const affected = inFolder.filter(f => !f.change && (nodesByFile.get(f.path) || []).some(n => n.uses.some(u => byId.get(u)?.change)));
   const a = changed.reduce((x, f) => x + f.change.additions, 0), d = changed.reduce((x, f) => x + f.change.deletions, 0);
-  const root = moduleRoot(zoom);
   $('#pin').innerHTML = `
     <button class="back" data-action="back">← Back</button>
-    <h2>${esc(dir === root ? modName(zoom) : relTo(dir, root) + '/')}</h2><p class="path">${esc((dir || '.') + '/')}</p>
+    <h2>${esc(folderName(dir))}</h2><p class="path">${esc((dir || '.') + '/')}</p>
     <p class="lead">${changed.length ? `${plural(changed.length, 'file')} of ${inFolder.length} changed in this folder and below.` : `None of its ${plural(inFolder.length, 'file')} changed in this PR.`}</p>
     ${changed.length ? `<div class="stats"><div><b><span class="n-a">+${a}</span> <span class="n-d">−${d}</span></b><span>lines</span></div></div>` : ''}
-    ${dir !== root ? '' : `<p><button class="linkbtn" data-mod="${esc(zoom)}">About ${esc(modName(zoom))} →</button></p>`}
+    ${mods.length ? `<h3>${mods.length === 1 ? 'Module' : 'Modules'}<span class="count">${mods.length}</span></h3><div class="chips">${mods.map(m => `<button class="chip" data-mod="${esc(m.id)}">${esc(m.name)}</button>`).join('')}</div>` : ''}
     ${changed.length ? `<h3>What changed<span class="count">${changed.length}</span></h3>${changed.map(f => fileSection(f, changed.length > 3)).join('')}` : ''}
     ${affected.length ? `<h3>Not changed, but use changed code<span class="count">${affected.length}</span></h3><div class="refs">${affected.map(f => symBtn(f.path)).join('')}</div>` : ''}`;
 }
@@ -1153,20 +1178,16 @@ let view = { type: 'summary' };
 function go(next, push = true) {
   if (push) history.push(view);
   view = next;
-  zoom = view.zoom && M.nodes.has(view.zoom) ? view.zoom : null;
-  selected = !zoom && view.type === 'module' ? view.id : null;
+  selected = null;
   hot = new Set();
   const sym = view.type === 'symbol' ? byId.get(view.id) : null;
-  // A symbol opens the folder of its file; the folder is kept in the view so Back returns to it.
-  folder = view.folder = zoom ? folderFor(zoom, view.folder ?? (sym ? dirOf(sym.file) : view.type === 'folder' ? view.id : undefined)) : null;
-  if (zoom && sym) {
-    // In the file view a file is selected; a symbol inside a file lights up the boxes it is used from and uses.
+  // A module opens its folder and a symbol the folder of its file; the folder is kept in the view so Back returns to it.
+  folder = view.folder = folderFor(view.folder ?? (sym ? dirOf(sym.file) : view.type === 'folder' ? view.id : view.type === 'module' && modById.has(view.id) ? moduleRoot(view.id) : undefined));
+  if (sym) {
+    // A file is selected; a symbol inside a file lights up the boxes it is used from and uses.
     const { keyOf } = graph();
     if (sym.kind === 'file') selected = sym.file;
     else for (const x of [sym.id, ...sym.references, ...sym.uses]) { const k = keyOf(byId.get(x)?.file); if (k) hot.add(k); }
-  } else if (view.type === 'symbol') {
-    const n = byId.get(view.id);
-    if (n) { hot.add(n.module); for (const r of n.references) hot.add(byId.get(r)?.module); for (const u of n.uses) hot.add(byId.get(u)?.module); hot.delete(undefined); }
   }
   if (view.type === 'summary') renderSummary();
   else if (view.type === 'module') renderModule(view.id);
@@ -1174,14 +1195,14 @@ function go(next, push = true) {
   else renderSymbol(view.id);
   renderGraph();
   $('#panel').scrollTop = 0;
-  $('#sheetLbl').textContent = view.type === 'summary' ? 'Summary' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? baseOf(view.id) + '/' : symLabel(view.id);
+  $('#sheetLbl').textContent = view.type === 'summary' ? 'Summary' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? folderName(view.id) : symLabel(view.id);
   // A tap on the empty map deselects without opening the details again.
   if (view.type !== 'summary' && !view.fromCanvas && isMobile()) openSheet();
   // Bring the selected box into view: a selected module or file, else the file or module of a symbol.
   // Opening a folder fits its own boxes (not the other folders and modules around them).
-  const target = selected ?? (sym ? (zoom ? graph().keyOf(sym.file) : sym.module) : null);
+  const target = selected ?? (sym ? graph().keyOf(sym.file) : null);
   if (target) focusBox(target);
-  else if (zoom && (view.type === 'folder' || view.type === 'module') && !view.fromCanvas) {
+  else if (!view.fromCanvas) {
     const G = graph();
     fitBoxes([...boxPos.keys()].filter(k => !G.nodes.get(k)?.ext));
   }
@@ -1241,29 +1262,20 @@ document.addEventListener('click', e => {
   if (b.closest('#results')) closeSearch();
   if (b.dataset.action === 'back') back();
   else if (b.dataset.action === 'show-all') { showAll = $('#showAll').checked = true; renderGraph(); }
-  else if (b.dataset.folder !== undefined && zoom) go({ type: 'folder', id: b.dataset.folder, zoom, folder: b.dataset.folder });
-  else if (b.dataset.action === 'zoom') go({ type: 'module', id: b.dataset.zoom, zoom: b.dataset.zoom });
-  else if (b.dataset.action === 'unzoom') go({ type: 'module', id: zoom });
-  else if (zoom && b.dataset.sym) {
-    // A symbol from another module opens that module's files.
-    const z = fileByPath.get(byId.get(b.dataset.sym)?.file)?.module || zoom;
-    go(b.closest('.node') && selected === b.dataset.sym ? { type: 'folder', id: folder, zoom, folder } : { type: 'symbol', id: b.dataset.sym, zoom: z });
-  }
-  // In the file view another module opens its own files.
-  else if (zoom && b.dataset.mod) go({ type: 'module', id: b.dataset.mod, zoom: b.dataset.mod });
-  else if (b.dataset.sym) go({ type: 'symbol', id: b.dataset.sym });
-  else if (b.dataset.mod) go(selected === b.dataset.mod ? { type: 'summary' } : { type: 'module', id: b.dataset.mod });
+  else if (b.dataset.folder !== undefined) go({ type: 'folder', id: b.dataset.folder, folder: b.dataset.folder });
+  // A second click on the selected file box deselects it.
+  else if (b.dataset.sym) go(b.closest('.node') && selected === b.dataset.sym ? { type: 'folder', id: folder, folder } : { type: 'symbol', id: b.dataset.sym });
+  else if (b.dataset.mod) go({ type: 'module', id: b.dataset.mod });
 });
 $('#canvas').addEventListener('click', e => {
   if (e.target.closest('.node')) return;
   if (isMobile()) closeSheet();
-  if (zoom) { if (view.type !== 'folder' || view.id !== folder) go({ type: 'folder', id: folder, zoom, folder, fromCanvas: true }); }
-  else if (view.type !== 'summary') go({ type: 'summary' });
+  if (folder === projectRoot) { if (view.type !== 'summary') go({ type: 'summary', fromCanvas: true }); }
+  else if (view.type !== 'folder' || view.id !== folder) go({ type: 'folder', id: folder, folder, fromCanvas: true });
 });
-$('#canvas').addEventListener('dblclick', e => { const g = e.target.closest('.node[data-mod]'); if (g && !zoom) go({ type: 'module', id: g.dataset.mod, zoom: g.dataset.mod }); });
 $('#canvas').addEventListener('keydown', e => { const g = e.target.closest('.node'); if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); g.dispatchEvent(new MouseEvent('click', { bubbles: true })); } });
 $('#showAll').addEventListener('change', e => { showAll = e.target.checked; renderGraph(); });
-$('#showAll').closest('label').title = 'In a module: also the unchanged files and folders, and every module its files link to';
+$('#showAll').closest('label').title = 'Also the unchanged files and folders here, and every folder elsewhere they link to';
 $('#showLinks').addEventListener('change', e => { showLinks = e.target.checked; renderGraph(); });
 $('#showCycles').addEventListener('change', e => { showCycles = e.target.checked; renderGraph(); });
 const hoverLinks = id => {
@@ -1310,9 +1322,9 @@ const loadIndex = i => window.DYFF_LIST ? Promise.resolve(window.DYFF_LIST[i].in
 const failed = err => { $('#pin').innerHTML = `<p class="empty">Could not load index.json (${esc(err.message)}).</p>`; };
 /** The view to keep after switching index, when what it shows still exists there. */
 function keptView(v) {
-  if (!v || (v.zoom && !M.nodes.has(v.zoom))) return { type: 'summary' };
+  if (!v || !D.files.some(f => under(f.path, v.folder))) return { type: 'summary' };
   if (v.type === 'module' && !M.nodes.has(v.id)) return { type: 'summary' };
-  if (v.type === 'symbol' && !byId.has(v.id)) return v.zoom ? { type: 'module', id: v.zoom, zoom: v.zoom } : { type: 'summary' };
+  if (v.type === 'symbol' && !byId.has(v.id)) return { type: 'folder', id: v.folder, folder: v.folder };
   return { ...v, fromCanvas: true };
 }
 function useIndex(data) {
