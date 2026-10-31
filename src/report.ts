@@ -61,6 +61,10 @@ export function markdownReport(index: Index, opts: ReportOptions = {}): string {
     out.push('### 🔴 New circular module dependencies', '');
     list(c.newCycles, (cy) => cy.map(code).join(' ⇄ '));
   }
+  if (c.newFileCycles.length) {
+    out.push('### 🔴 New circular file imports', '');
+    list(c.newFileCycles, (cy) => cy.map(code).join(' ⇄ '));
+  }
   if (c.newModuleDependencies.length) {
     out.push('### New module dependencies', '');
     list(c.newModuleDependencies, (e) => `${code(e.from)} → ${code(e.to)} (${e.via}${e.forwardRef ? ', forwardRef' : ''})`);

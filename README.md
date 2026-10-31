@@ -8,6 +8,7 @@ For a PR, dyff reports:
 - **references the PR breaks**: unchanged code that still calls a symbol the PR removed or renamed
 - **signature changes** and the callers outside the PR that should be checked
 - **new module dependencies** and **new circular dependencies** (including `forwardRef`)
+- **new circular imports between files** (runtime imports; type-only imports and tests don't count)
 - **affected routes**: callers are followed upward to HTTP routes, message patterns, GraphQL resolvers, cron jobs and event handlers, e.g. `findOne → OrdersService.createForUser → OrdersController.create → POST /orders/:userId`
 - **test reach**: which spec files reach each changed symbol, and which changed code no test reaches
 
@@ -218,7 +219,7 @@ The base index, the overlay and the merged result share one format (`schemaVersi
     }
   ],
   "pr": { "changedFiles": [...], "deletedFiles": [...], "deletedSymbols": [...], "renamedSymbols": {...} }, // overlay and merged
-  "checks": { "danglingReferences": [...], "signatureChanges": [...], "newCycles": [...], "affectedRoutes": [...], "tests": [...], "untested": [...] } // merged
+  "checks": { "danglingReferences": [...], "signatureChanges": [...], "newCycles": [...], "newFileCycles": [...], "affectedRoutes": [...], "tests": [...], "untested": [...] } // merged
 }
 ```
 

@@ -94,8 +94,20 @@ export function moduleEdges(index: Index): ModuleEdge[] {
   return [...edges.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.via.localeCompare(b.via));
 }
 
-/** Strongly connected components with more than one module (Tarjan). */
-export function findCycles(edges: ModuleEdge[]): string[][] {
+/** Runtime imports between files: type-only imports, tests and removed files left out. */
+export function fileEdges(index: Index): { from: string; to: string }[] {
+  const live = new Set(index.files.filter((f) => f.change?.status !== 'removed' && !f.test).map((f) => f.path));
+  const edges = new Map<string, { from: string; to: string }>();
+  for (const f of index.files) {
+    if (!live.has(f.path)) continue;
+    for (const im of f.imports)
+      if (!im.typeOnly && im.resolved && im.resolved !== f.path && live.has(im.resolved)) edges.set(`${f.path}|${im.resolved}`, { from: f.path, to: im.resolved });
+  }
+  return [...edges.values()];
+}
+
+/** Strongly connected components with more than one member (Tarjan): modules, or files. */
+export function findCycles(edges: { from: string; to: string }[]): string[][] {
   const adj = new Map<string, string[]>();
   for (const e of edges) {
     if (!adj.has(e.from)) adj.set(e.from, []);
@@ -183,6 +195,15 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
   findCycles(baseEdges).forEach((c, i) => c.forEach((m) => baseCycleOf.set(m, i)));
   const cycles = findCycles(mergedEdges);
   const isNewCycle = (c: string[]) => !baseCycleOf.has(c[0]) || c.some((m) => baseCycleOf.get(m) !== baseCycleOf.get(c[0]));
+  // The same for circular file imports, with a renamed file matched to its base path.
+  const baseFileCycleOf = new Map<string, number>();
+  findCycles(fileEdges(base)).forEach((c, i) => c.forEach((f) => baseFileCycleOf.set(f, i)));
+  const basePath = new Map(merged.files.map((f) => [f.path, f.change?.status === 'added' ? null : (f.change?.oldPath ?? f.path)]));
+  const fileCycles = findCycles(fileEdges(merged));
+  const isNewFileCycle = (c: string[]) => {
+    const ids = c.map((f) => { const b = basePath.get(f); return b ? baseFileCycleOf.get(b) : undefined; });
+    return ids[0] === undefined || ids.some((i) => i !== ids[0]);
+  };
 
   // Seeds: the most specific changed symbols (a class only counts when none of its members changed).
   // A .vue file counts too: its file-level code includes the template.
@@ -261,6 +282,8 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
     removedModuleDependencies: baseEdges.filter((e) => !mergedKeys.has(key(e))),
     newCycles: cycles.filter(isNewCycle),
     cycles,
+    newFileCycles: fileCycles.filter(isNewFileCycle),
+    fileCycles,
     affectedRoutes: [...affected.values()].sort((a, b) => (a.route.fullPath ?? a.route.path).localeCompare(b.route.fullPath ?? b.route.path)),
     tests,
     untested,

@@ -240,6 +240,10 @@ export interface Checks {
   newCycles: string[][];
   /** All module cycles in the merged graph. */
   cycles: string[][];
+  /** File import cycles in the merged graph whose files were not already one cycle on the base side. */
+  newFileCycles: string[][];
+  /** All file import cycles in the merged graph (runtime imports between non-test files). */
+  fileCycles: string[][];
   affectedRoutes: AffectedRoute[];
   tests: TestReach[];
   untested: string[];

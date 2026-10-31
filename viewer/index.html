@@ -416,7 +416,11 @@ function build() {
     n.state = !n.changed ? 'none' : n.files.every(f => f.change.status === 'added') ? 'added' : n.files.every(f => f.change.status === 'removed') ? 'removed' : 'modified';
     n.affected = !n.changed && affected.has(n.id);
   }
-  M = { nodes, edges, cycleState };
+  // Circular imports between files; an index from before file cycles has none.
+  const fcyc = new Map(); (C.fileCycles || []).forEach((c, i) => c.forEach(f => fcyc.set(f, i)));
+  const newFileCycle = new Set((C.newFileCycles || []).map(c => c.join('|')));
+  const fileCycleState = (a, b) => !fcyc.has(a) || fcyc.get(a) !== fcyc.get(b) ? false : newFileCycle.has(C.fileCycles[fcyc.get(a)].join('|')) ? 'new' : 'old';
+  M = { nodes, edges, cycleState, fileCycleState };
 }
 
 /* ---------- The folder map ---------- */
@@ -528,8 +532,9 @@ function fileGraph(folder) {
     for (const [side, list] of sides) for (const im of list) {
       const t = fileByPath.get(im.resolved);
       if (!shown(t)) continue;
-      const e = link(keyOf(f.path), keyOf(t.path), f.path + '>' + t.path, side, { unknown: !before, mods: [f.module, t.module] });
+      const pk = f.path + '>' + t.path, e = link(keyOf(f.path), keyOf(t.path), pk, side, { unknown: !before, mods: [f.module, t.module] });
       if (e && !im.typeOnly) e.typeOnly = false;
+      if (e && side === 'now' && !im.typeOnly && !f.test && !t.test) e.pairs.get(pk).fcycle = M.fileCycleState(f.path, t.path);
     }
   }
   const G = { folder, tests: showTests, keyOf, nodes, edges, link };
@@ -539,7 +544,10 @@ function fileGraph(folder) {
     e.changed = ps.some(p => p.now && !p.before && !p.unknown);
     e.removed = ps.every(p => p.before && !p.now && !p.unknown);
     e.files = ps.filter(p => p.mods).length;
-    e.cycle = ps.some(p => p.cycle === 'new') ? 'new' : ps.some(p => p.cycle) ? 'old' : false;
+    // A link can be part of a circular module dependency and of circular file imports at once.
+    e.mcycle = ps.some(p => p.cycle === 'new') ? 'new' : ps.some(p => p.cycle) ? 'old' : false;
+    e.fcycle = ps.some(p => p.fcycle === 'new') ? 'new' : ps.some(p => p.fcycle) ? 'old' : false;
+    e.cycle = e.mcycle === 'new' || e.fcycle === 'new' ? 'new' : e.mcycle || e.fcycle;
     // Still imports a file this PR deletes: shown like a PR link, it is what breaks.
     e.broken = ps.some(p => p.now) && nodes.get(e.to).state === 'removed';
     nodes.get(e.from).out.set(e.to, e); nodes.get(e.to).inn.add(e.from);
@@ -576,6 +584,13 @@ function moduleLayer(G) {
     const n = boxes.size === 1 && nodes.get([...boxes][0]);
     if (n && n.cycle !== 'new') n.cycle = newCycle.has(c.join('|')) ? 'new' : 'old';
   }
+  // The same for circular file imports inside one box.
+  const newFileCycle = new Set((C.newFileCycles || []).map(c => c.join('|')));
+  for (const c of C.fileCycles || []) {
+    const boxes = new Set(c.map(keyOf));
+    const n = boxes.size === 1 && nodes.get([...boxes][0]);
+    if (n && n.fileCycle !== 'new') n.fileCycle = newFileCycle.has(c.join('|')) ? 'new' : 'old';
+  }
 }
 const graph = () => FG && FG.folder === folder && FG.tests === showTests ? FG : (FG = fileGraph(folder));
 /** The folder to show: the one asked for, or the project's root. */
@@ -588,7 +603,7 @@ function visibleIds() {
   // What the PR changed, uses changed code, changed a link or has a new cycle in it; the rest of the
   // folder folds into one box, and other folders show only when the PR changed a link to them.
   const inside = [...G.nodes.values()].filter(n => !n.ext && !n.rest);
-  const relevant = inside.filter(n => n.changed || n.affected || n.warn || n.prLink || n.cycle === 'new');
+  const relevant = inside.filter(n => n.changed || n.affected || n.warn || n.prLink || n.cycle === 'new' || n.fileCycle === 'new');
   for (const n of showAll || !relevant.length ? inside : relevant) ids.add(n.id);
   for (const n of G.nodes.values()) if (n.ext && (showAll || n.prLink)) ids.add(n.id);
   if (selected && G.nodes.has(selected)) { ids.add(selected); const n = G.nodes.get(selected); n.out.forEach((_, t) => ids.add(t)); n.inn.forEach(f => ids.add(f)); }
@@ -676,7 +691,8 @@ function renderGraph() {
     const cls = ['edge', e.removed ? 'rem' : cyc === 'new' ? (e.changed ? 'cyc-new' : 'cyc-in') : cyc ? 'cyc' : e.changed ? 'chg' : '', e.typeOnly ? 'imp' : '', dim ? 'dim' : '', shown ? '' : 'ctx'].join(' ');
     const mk = e.removed ? 'mr' : cyc === 'new' ? 'mx' : cyc ? 'mp' : e.changed ? 'mc' : 'mn';
     const what = [e.mod && `@Module import${e.forwardRef ? ' (forwardRef)' : ''}`, e.files && `${e.typeOnly ? 'Type-only import' : 'Import'}${e.files > 1 ? ` between ${e.files} files` : ''}`].filter(Boolean).join(', ');
-    const title = `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${what}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : e.broken ? '\nStill imports a file this PR removes' : ''}${e.cycle === 'new' ? (e.changed ? '\nCloses a circular module dependency: remove it to break the cycle' : '\nAlready there, now part of a circular module dependency this PR creates') : e.cycle ? '\nPart of a circular module dependency that already existed' : ''}`;
+    const cycleNote = (st, what) => st === 'new' ? (e.changed ? `\nCloses ${what}: remove it to break the cycle` : `\nAlready there, now part of ${what} this PR creates`) : st ? `\nPart of ${what} that already existed` : '';
+    const title = `${G.nodes.get(e.from).name} → ${G.nodes.get(e.to).name}\n${what}${e.removed ? '\nRemoved in this PR' : e.changed ? '\nNew in this PR' : e.broken ? '\nStill imports a file this PR removes' : ''}${cycleNote(e.mcycle, 'a circular module dependency')}${cycleNote(e.fcycle, 'circular file imports')}`;
     eh += `<path class="${cls}" data-a="${esc(e.from)}" data-b="${esc(e.to)}" d="${d}" marker-end="url(#${mk})"><title>${esc(title)}</title></path>`;
   }
   let nh = '';
@@ -692,7 +708,9 @@ function renderGraph() {
       : n.warn ? `<tspan class="w">⚠ ${plural(n.warn, 'broken reference')}</tspan>` : n.affected ? 'Uses changed code' : 'Unchanged';
     const target = n.rest ? 'data-action="show-all"' : n.dir ? `data-folder="${esc(n.dir)}"` : `data-sym="${esc(id)}"`;
     // Top right: the NestJS modules in the box, and a circular module dependency inside it.
-    const tag = [n.cycle && `<tspan class="${n.cycle === 'new' ? 'x' : 'p'}">⟳ cycle</tspan>`, n.modules?.length && (n.dir && (n.modules.length > 1 || moduleRoot(n.modules[0]) !== n.dir) ? plural(n.modules.length, 'module') : 'module')].filter(Boolean).join('  ');
+    // Existing circular file imports are common (barrel files), so their mark waits for "Show existing cycles".
+    const cyc = n.cycle === 'new' || n.fileCycle === 'new' ? 'new' : n.cycle || (showCycles && n.fileCycle) ? 'old' : false;
+    const tag = [cyc && `<tspan class="${cyc === 'new' ? 'x' : 'p'}">⟳ cycle</tspan>`, n.modules?.length && (n.dir && (n.modules.length > 1 || moduleRoot(n.modules[0]) !== n.dir) ? plural(n.modules.length, 'module') : 'module')].filter(Boolean).join('  ');
     const nameLen = tag ? (n.dir ? 14 : 17) : n.dir ? 22 : 25;
     // Bottom right: an eye while the box still holds a changed file that is not marked viewed.
     const eye = n.unviewed ? `<g class="nv" transform="translate(${W - 28},55)"><path d="M1 5s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4z"/><circle cx="8" cy="5" r="1.8"/><title>${n.dir ? `${plural(n.unviewed, 'changed file')} not viewed yet` : 'Not viewed yet'}</title></g>` : '';
@@ -938,6 +956,7 @@ function renderSummary() {
     ${section('Broken references', C.danglingReferences, d => `<button class="row" data-sym="${esc(d.from)}"><span class="main"><code>${esc(symLabel(d.from))}</code> still uses <code>${esc(symLabel(d.to))}</code>${d.maybeRenamedTo ? `, renamed to <code>${esc(symLabel(d.maybeRenamedTo))}</code>?` : ''}</span><span class="sub">${esc(d.file)}</span></button>`, true)}
     ${section('Signature changes with callers outside the PR', sigs, s => `<button class="row" data-sym="${esc(s.id)}"><span class="main"><code>${esc(symLabel(s.id))}</code>: ${plural(s.callersOutsidePr.length, 'caller')} to check</span><span class="sub">${esc(s.before)} → ${esc(s.after)}</span></button>`, true)}
     ${section('New circular dependencies', C.newCycles, c => `<button class="row" data-mod="${esc(c[0])}"><span class="main">${c.map(m => esc(modName(m))).join(' ⇄ ')}</span></button>`, true)}
+    ${C.fileCycles ? section('New circular file imports', C.newFileCycles, c => `<button class="row" data-sym="${esc(c[0])}"><span class="main">${c.map(f => `<code>${esc(baseOf(f))}</code>`).join(' ⇄ ')}</span><span class="sub">${esc((commonDir(c) || '.') + '/')}</span></button>`, true) : ''}
     ${section('New module dependencies', C.newModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via === 'module-import' ? '@Module import' : 'file import'}${e.forwardRef ? ', forwardRef' : ''}</span></button>`)}
     ${C.removedModuleDependencies.length ? section('Removed module dependencies', C.removedModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via}</span></button>`) : ''}
     ${section('Affected routes', C.affectedRoutes, r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(id => `<span>${esc(symLabel(id))}</span>`).join('')}</span></button>`)}
@@ -947,7 +966,7 @@ function renderSummary() {
     ${changedFiles().map(f => fileSection(f, true)).join('')}
     <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
     ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
-    <p class="foot">Open a folder in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Arrows are imports between files and folders, and <code>@Module</code> imports between the folders of two modules; dotted ones are type-only. Blue arrows are new in this PR, purple ones are part of a circular module dependency that already existed, dark red ones are new links that close a circular module dependency, faint red ones were already there and are now part of one, orange ones are removed. <b>⟳ cycle</b> on a folder: a circular module dependency inside it.</p>`;
+    <p class="foot">Open a folder in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Arrows are imports between files and folders, and <code>@Module</code> imports between the folders of two modules; dotted ones are type-only. Blue arrows are new in this PR, purple ones are part of a circular module dependency that already existed, dark red ones are new links that close a circular module dependency, faint red ones were already there and are now part of one, orange ones are removed. The same colors mark circular imports between files. <b>⟳ cycle</b> on a folder: a circular module dependency or circular file imports inside it.</p>`;
 }
 
 /* ---------- Review comments ---------- */
@@ -1193,6 +1212,8 @@ function renderSymbol(id) {
   const children = D.nodes.filter(c => c.parent === id);
   // A whole file gets the same breakdown as in a module: imports and top of file, then each changed symbol.
   const file = n.kind === 'file' ? fileByPath.get(n.file) : null;
+  const fc = file && (C.fileCycles || []).find(c => c.includes(file.path));
+  const fcNew = fc && C.newFileCycles.some(c => c.join('|') === fc.join('|'));
   $('#pin').innerHTML = `
     <div class="ptop"><button class="back" data-action="back">← Back</button>${file?.change ? viewedSwitch(file.path) : ''}</div>
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
@@ -1200,6 +1221,7 @@ function renderSymbol(id) {
     <div class="chips" style="margin-bottom:10px">${ch ? `<span class="badge b-${ch.status}">${statusWord(ch.status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
     ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
+    ${fc ? `<h3>Circular imports<span class="count ${fcNew ? 'warn' : ''}">${fc.length - 1}</span></h3><p class="note">${fcNew ? 'This PR creates a cycle of imports between this file and these.' : 'This file is part of a cycle of imports that already existed.'}</p><div class="refs">${fc.filter(f => f !== file.path).map(f => symBtn(f)).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
     ${file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}

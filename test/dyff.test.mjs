@@ -317,6 +317,42 @@ describe('cycles that exist before the PR', () => {
   });
 });
 
+describe('circular file imports', () => {
+  let dir;
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('finds new and existing cycles, follows renames and skips type-only imports', () => {
+    dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    const write = (path, text) => {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), text);
+    };
+    cpSync(join(fixture, 'base', 'tsconfig.json'), join(dir, 'tsconfig.json'));
+    write('src/a.ts', "import { b } from './b';\nexport const a = () => b;\n");
+    write('src/b.ts', "import { a } from './a';\nexport const b = () => a;\n");
+    write('src/c.ts', 'export const c = 1;\n');
+    write('src/d.ts', "import { c } from './c';\nexport const d = c;\n");
+    write('src/e.ts', "import type { F } from './f';\nexport type E = { f?: F };\n");
+    write('src/f.ts', "import { E } from './e';\nexport type F = { e?: E };\nexport const f = 1;\n");
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    const base = buildBaseIndex({ root: dir });
+
+    git(dir, 'checkout', '-qb', 'feature');
+    git(dir, 'mv', 'src/b.ts', 'src/b2.ts');
+    write('src/a.ts', "import { b } from './b2';\nexport const a = () => b;\n");
+    write('src/c.ts', "import { d } from './d';\nexport const c = 1;\nexport const cd = () => d;\n");
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'pr');
+    const merged = merge(base, buildOverlay({ root: dir, baseRef: 'main' }));
+
+    assert.deepEqual(merged.checks.fileCycles, [['src/a.ts', 'src/b2.ts'], ['src/c.ts', 'src/d.ts']]);
+    assert.deepEqual(merged.checks.newFileCycles, [['src/c.ts', 'src/d.ts']]);
+    assert.match(markdownReport(merged), /New circular file imports[\s\S]*src\/c\.ts/);
+  });
+});
+
 describe('files with syntax errors', () => {
   it('indexes a file whose import has no string specifier', () => {
     const dir = mkdtempSync(join(tmpdir(), 'dyff-'));
