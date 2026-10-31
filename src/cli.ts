@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildBaseIndex, buildOverlay } from './indexer.js';
 import { merge } from './merge.js';
@@ -15,8 +16,8 @@ Usage
   dyff merge   <base.json> <overlay.json> [--depth N] [-o merged.json]
   dyff pr      --base <base.json> (--base-ref <ref> | --diff <file|->) [project options] [-o merged.json] [--report report.md]
   dyff report  <merged.json> [--map] [--link <url>] [--embed-in <body.md>] [--limit N] [-o report.md]
-  dyff html    <merged.json> [-o pr-map.html]
-  dyff serve   <merged.json> [--port 4173] [--host 127.0.0.1]
+  dyff html    <merged.json>... [-o pr-map.html]
+  dyff serve   <merged.json>... [--port 4173] [--host 127.0.0.1]
 
 Commands
   index     Index the whole codebase (run on main): modules, files, classes,
@@ -35,6 +36,9 @@ Commands
   html      The interactive page as one self-contained HTML file.
   serve     Open a merged index in the browser: module map, review checks,
             changed symbols with their diffs, callers and routes.
+            html and serve take several merged indexes too, e.g. one per
+            commit, and the page switches between them. Each is listed
+            under its file name.
 
 Project options
   --root <dir>        Directory node ids are relative to (default: cwd)
@@ -99,6 +103,15 @@ async function main(argv: string[]): Promise<void> {
     if (!p) throw new UsageError(`Missing ${what}.`);
     return JSON.parse(readFileSync(p, 'utf8')) as Index;
   };
+  /** The merged indexes given as arguments, each labeled with its file name. */
+  const readMerged = (what: string) => {
+    if (!args.length) throw new UsageError('Missing merged index path.');
+    return args.map((p) => {
+      const index = readIndex(p, 'merged index path');
+      if (!index.checks) throw new UsageError(`${what} needs merged indexes (output of dyff merge or dyff pr); ${p} is not one.`);
+      return { label: basename(p).replace(/\.json$/i, ''), index };
+    });
+  };
   const readDiff = () => (v.diff === undefined ? undefined : readFileSync(v.diff === '-' ? 0 : v.diff, 'utf8'));
   const write = (text: string, file = v.out) => {
     if (file) {
@@ -132,9 +145,8 @@ async function main(argv: string[]): Promise<void> {
       break;
     }
     case 'serve': {
-      const index = readIndex(args[0], 'merged index path');
-      if (!index.checks) throw new UsageError('serve needs a merged index (output of dyff merge or dyff pr).');
-      const { url } = await serve(JSON.stringify(index), { port: v.port ? Number(v.port) : undefined, host: v.host });
+      const list = readMerged('serve').map((x) => ({ label: x.label, index: JSON.stringify(x.index) }));
+      const { url } = await serve(list.length === 1 ? list[0].index : list, { port: v.port ? Number(v.port) : undefined, host: v.host });
       process.stderr.write(`dyff viewer running at ${url}  (Ctrl+C to stop)\n`);
       break;
     }
@@ -148,9 +160,8 @@ async function main(argv: string[]): Promise<void> {
       break;
     }
     case 'html': {
-      const index = readIndex(args[0], 'merged index path');
-      if (!index.checks) throw new UsageError('html needs a merged index (output of dyff merge or dyff pr).');
-      write(standaloneHtml(index));
+      const list = readMerged('html');
+      write(standaloneHtml(list.length === 1 ? list[0].index : list));
       break;
     }
     default:

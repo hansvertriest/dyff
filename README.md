@@ -85,6 +85,23 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 | `--pretty` | Indented JSON |
 | `-q, --quiet` | No progress output on stderr |
 
+### Commit by commit
+
+`serve` and `html` also take several merged indexes, and the page gets a commit picker (← → and a list) to switch between them. You stay on the same module or folder when it exists in the other one. Each is listed under its file name, in the order given. For example, every commit of a branch against its parent:
+
+```sh
+git checkout -q main && dyff index -q -o base.json
+files=()
+for c in $(git rev-list --reverse main..feature); do
+  git checkout -q $c
+  f="$(git log -1 --format='%h %s' | tr '/' '-').json"
+  dyff pr -q --base base.json --base-ref "$c^" -o "$f" && files+=("$f")
+  dyff index -q -o base.json
+done
+git checkout -q feature
+dyff serve "${files[@]}"
+```
+
 ### Review comments
 
 In `dyff serve` or a `dyff html` page, hover any diff line and click **+** to comment on it. The summary lists your comments and has a box for an overall comment. Comments stay in your browser, per head commit, until you delete them.

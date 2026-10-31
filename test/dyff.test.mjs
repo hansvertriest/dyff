@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reverseApply, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reverseApply, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -245,6 +245,20 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     const html = standaloneHtml(merged);
     assert.match(html, /<script>window\.DYFF_DATA = \{/);
     assert.ok(!html.slice(html.indexOf('DYFF_DATA'), html.indexOf('</script>', html.indexOf('DYFF_DATA'))).includes('<'));
+  });
+
+  it('serves several merged indexes to switch between', async () => {
+    assert.match(standaloneHtml([{ label: 'a', index: merged }, { label: 'b', index: merged }]), /<script>window\.DYFF_LIST = \[\{"label":"a","index":\{/);
+    const { server, url } = await serve([{ label: 'one', index: '{"n":1}' }, { label: 'two', index: '{"n":2}' }], { port: 0 });
+    try {
+      const get = async (p) => { const r = await fetch(url + p); return r.ok ? r.json() : r.status; };
+      assert.deepEqual(await get('indexes.json'), ['one', 'two']);
+      assert.deepEqual(await get('index.json'), { n: 1 });
+      assert.deepEqual(await get('index.json?i=1'), { n: 2 });
+      assert.equal(await get('index.json?i=2'), 404);
+    } finally {
+      server.close();
+    }
   });
 
   it('writes a markdown report', () => {

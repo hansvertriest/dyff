@@ -51,6 +51,11 @@ code{font-family:var(--mono);font-size:.92em}
 .brand{font-weight:600;font-size:17px;display:flex;align-items:center;gap:9px;margin:0}
 .prtitle{margin:0;font-weight:500;flex:1 1 300px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .prtitle small{color:var(--muted);font-weight:400;margin-left:6px;font-family:var(--mono);font-size:12.5px}
+.commits{display:flex;align-items:center;gap:4px;min-width:0}
+.commits[hidden]{display:none}
+.commits select{min-width:0;max-width:320px;height:36px;padding:0 8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:13px;text-overflow:ellipsis}
+.commits .iconbtn{min-width:32px;padding:0 6px}
+.commits .iconbtn:disabled{opacity:.4}
 .search{position:relative;flex:0 1 300px;min-width:180px}
 .search input{width:100%;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
 .results{position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(15,20,30,.14);max-height:60vh;overflow:auto;padding:4px}
@@ -245,6 +250,9 @@ details.file>summary.fhead:hover{background:var(--line)}
   .brand svg{width:18px;height:18px}
   .prtitle{flex:1 1 auto;font-size:13px}
   .prtitle small{display:none}
+  .top.multi .prtitle{display:none}
+  .commits{flex:1 1 auto}
+  .commits select{flex:1 1 auto;width:0;max-width:none}
   .search{display:none}
   .top.searching>:not(.search){display:none !important}
   .top.searching .search{display:flex;gap:8px;flex:1 1 auto;min-width:0}
@@ -287,6 +295,11 @@ details.file>summary.fhead:hover{background:var(--line)}
     dyff
   </h1>
   <p class="prtitle" id="prTitle"></p>
+  <div class="commits" id="commits" hidden>
+    <button class="iconbtn" type="button" data-step="-1" aria-label="Previous commit"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <select id="commitSel" aria-label="Commit"></select>
+    <button class="iconbtn" type="button" data-step="1" aria-label="Next commit"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+  </div>
   <div class="search">
     <input id="q" type="search" placeholder="Find a class, method or route…" autocomplete="off" spellcheck="false" aria-label="Find a symbol">
     <div class="results" id="results" hidden></div>
@@ -1289,20 +1302,57 @@ function title() {
 }
 
 /* ---------- Load ---------- */
-(window.DYFF_DATA ? Promise.resolve(window.DYFF_DATA) : fetch('index.json').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })).then(data => {
+// Several merged indexes (e.g. one per commit) come as a list of labels; one of them is shown at a time.
+let indexes = null, current = 0;
+const fetchJson = u => fetch(u).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+const loadIndex = i => window.DYFF_LIST ? Promise.resolve(window.DYFF_LIST[i].index)
+  : window.DYFF_DATA ? Promise.resolve(window.DYFF_DATA) : fetchJson(indexes ? `index.json?i=${i}` : 'index.json');
+const failed = err => { $('#pin').innerHTML = `<p class="empty">Could not load index.json (${esc(err.message)}).</p>`; };
+/** The view to keep after switching index, when what it shows still exists there. */
+function keptView(v) {
+  if (!v || (v.zoom && !M.nodes.has(v.zoom))) return { type: 'summary' };
+  if (v.type === 'module' && !M.nodes.has(v.id)) return { type: 'summary' };
+  if (v.type === 'symbol' && !byId.has(v.id)) return v.zoom ? { type: 'module', id: v.zoom, zoom: v.zoom } : { type: 'summary' };
+  return { ...v, fromCanvas: true };
+}
+function useIndex(data) {
+  const prev = D ? view : null;
   D = data;
   if (!D.checks) { $('#pin').innerHTML = '<p class="empty">This index has no PR checks. Serve the output of <code>dyff merge</code> or <code>dyff pr</code>.</p>'; return; }
   const pr = D.pr || {};
   $('#prTitle').innerHTML = `${esc(baseOf(D.root))} · ${esc(title())}${pr.headCommit ? `<small>${esc(pr.baseCommit?.slice(0, 7) || '')}…${esc(pr.headCommit.slice(0, 7))}</small>` : ''}`;
   document.title = `dyff · ${baseOf(D.root)}`;
+  review = { body: '', comments: [] };
   loadReview();
   searchIndex = [
     ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
     ...D.modules.map(m => ({ mod: m.id, label: m.name, sub: m.id, key: (m.name + ' ' + m.id).toLowerCase() })),
   ];
+  selected = null;
   build();
-  go({ type: 'summary' }, false);
-}).catch(err => { $('#pin').innerHTML = `<p class="empty">Could not load index.json (${esc(err.message)}).</p>`; });
+  history = [];
+  go(keptView(prev), false);
+}
+function renderCommits() {
+  const box = $('#commits');
+  box.hidden = !indexes;
+  $('.top').classList.toggle('multi', !!indexes);
+  if (!indexes) return;
+  $('#commitSel').innerHTML = indexes.map((l, i) => `<option value="${i}"${i === current ? ' selected' : ''}>${i + 1}/${indexes.length} · ${esc(l)}</option>`).join('');
+  box.querySelector('[data-step="-1"]').disabled = current === 0;
+  box.querySelector('[data-step="1"]').disabled = current === indexes.length - 1;
+}
+function showIndex(i) {
+  if (!indexes || i < 0 || i >= indexes.length) return;
+  current = i;
+  renderCommits();
+  loadIndex(i).then(useIndex).catch(failed);
+}
+$('#commitSel').addEventListener('change', e => showIndex(Number(e.target.value)));
+$('#commits').addEventListener('click', e => { const b = e.target.closest('[data-step]'); if (b) showIndex(current + Number(b.dataset.step)); });
+(window.DYFF_LIST ? Promise.resolve(window.DYFF_LIST.map(x => x.label)) : window.DYFF_DATA ? Promise.resolve(null) : fetch('indexes.json').then(r => r.ok ? r.json() : null, () => null))
+  .then(labels => { indexes = labels && labels.length > 1 ? labels : null; renderCommits(); return loadIndex(0); })
+  .then(useIndex).catch(failed);
 })();
 </script>
 </body>
