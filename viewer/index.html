@@ -1235,8 +1235,9 @@ function go(next, push = true) {
   renderGraph();
   $('#panel').scrollTop = 0;
   $('#sheetLbl').textContent = view.type === 'summary' ? 'Summary' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? folderName(view.id) : symLabel(view.id);
-  // A tap on the empty map deselects without opening the details again.
-  if (view.type !== 'summary' && !view.fromCanvas && isMobile()) openSheet();
+  // A tap on the empty map deselects without opening the details again, and opening a folder only
+  // moves the map: its details update behind the closed sheet.
+  if (view.type !== 'summary' && view.type !== 'folder' && !view.fromCanvas && isMobile()) openSheet();
   // Bring the selected box into view: a selected module or file, else the file or module of a symbol.
   // Opening a folder fits its own boxes (not the other folders and modules around them).
   const target = selected ?? (sym ? graph().keyOf(sym.file) : null);
