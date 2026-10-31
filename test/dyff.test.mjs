@@ -303,6 +303,21 @@ describe('cycles that exist before the PR', () => {
   });
 });
 
+describe('files with syntax errors', () => {
+  it('indexes a file whose import has no string specifier', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyff-'));
+    try {
+      writeFileSync(join(dir, 'a.ts'), 'export const a = 1;\n');
+      writeFileSync(join(dir, 'b.ts'), "import { a } from ./a';\nexport const b = a;\n");
+      const index = buildBaseIndex({ root: dir });
+      assert.deepEqual(index.files.map((f) => f.path), ['a.ts', 'b.ts']);
+      assert.deepEqual(index.files[1].imports, []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Vue fixture: single-file components and vue-router routes', () => {
   let dir, base, merged;
   const node = (index, id) => index.nodes.find((n) => n.id === id);

@@ -249,6 +249,8 @@ export class Analyzer {
   private fileImports(sf: SourceFile): FileImport[] {
     const out: FileImport[] = [];
     for (const d of sf.getImportDeclarations()) {
+      // A file with a syntax error can have an import without a string specifier.
+      if (!ts.isStringLiteral(d.compilerNode.moduleSpecifier)) continue;
       const target = d.getModuleSpecifierSourceFile();
       const resolved = target ? this.rel(target.getFilePath()) : undefined;
       const names: string[] = [];
@@ -265,8 +267,9 @@ export class Analyzer {
       });
     }
     for (const d of sf.getExportDeclarations()) {
-      const spec = d.getModuleSpecifierValue();
-      if (!spec) continue;
+      const ms = d.compilerNode.moduleSpecifier;
+      if (!ms || !ts.isStringLiteral(ms)) continue;
+      const spec = ms.text;
       const target = d.getModuleSpecifierSourceFile();
       const resolved = target ? this.rel(target.getFilePath()) : undefined;
       out.push({
