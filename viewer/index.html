@@ -65,7 +65,7 @@ code{font-family:var(--mono);font-size:.92em}
 .results button:hover,.results button.on{background:var(--surface-2)}
 .results small{display:block;color:var(--muted);font:11.5px var(--mono)}
 
-main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
+main{--w1:500px;--w2:440px;flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 0 var(--w1)}
 .stage{position:relative;min-width:0;min-height:0;display:flex;flex-direction:column}
 .stagebar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:12px 20px 0}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
@@ -141,6 +141,16 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 500px}
 .mk-n{fill:var(--edge)} .mk-c{fill:var(--l-new)} .mk-r{fill:var(--l-rem)} .mk-p{fill:var(--l-cyc)} .mk-x{fill:var(--l-cyc-new)}
 
 .panel{border-left:1px solid var(--line);background:var(--surface);overflow:auto;min-height:0}
+/* ⌘-click (Alt-click off a Mac) opens a second sidebar to the right of the first. */
+main.two{grid-template-columns:minmax(0,1fr) 0 var(--w1) 0 var(--w2)}
+/* A zero-width column before each sidebar holds its resize handle, centered on the border. */
+.gutter{position:relative;z-index:6;width:0}
+.gutter::before{content:"";position:absolute;top:0;bottom:0;left:-4px;width:8px;cursor:col-resize}
+.gutter::after{content:"";position:absolute;top:0;bottom:0;left:-1px;width:2px;background:var(--accent);opacity:0;transition:opacity .12s}
+.gutter:hover::after,.gutter.drag::after,.gutter:focus-visible::after{opacity:1}
+.gutter:focus-visible{outline:none}
+body.resizing{cursor:col-resize;user-select:none}
+body.resizing .canvas{pointer-events:none}
 .pin{padding:20px 22px 40px}
 .panel h2{font-size:22px;line-height:1.25;margin:0 0 2px;letter-spacing:-.01em;word-break:break-word}
 .panel h3{font-size:14px;margin:22px 0 8px;display:flex;align-items:center;gap:8px}
@@ -307,6 +317,7 @@ details.file>summary.fhead:hover{background:var(--line)}
   .zoomctl{bottom:calc(16px + env(safe-area-inset-bottom))}
   .panel{position:fixed;left:0;right:0;bottom:0;z-index:30;height:58vh;height:58dvh;border:1px solid var(--line);border-bottom:0;border-radius:16px 16px 0 0;box-shadow:0 -8px 30px rgba(15,20,30,.2);overscroll-behavior:contain;transform:translateY(105%);visibility:hidden;transition:transform .24s ease,height .24s ease,visibility 0s linear .24s}
   .panel.open{transform:none;visibility:visible;transition:transform .24s ease,height .24s ease}
+  #panel2,.gutter{display:none !important}
   .panel.full{height:calc(100vh - 10px);height:calc(100dvh - 10px)}
   .panel.dragging{transition:none}
   .sheethead{display:flex;align-items:center;justify-content:flex-end;position:sticky;top:0;z-index:2;height:44px;padding:0 8px;background:var(--surface)}
@@ -374,10 +385,13 @@ details.file>summary.fhead:hover{background:var(--line)}
       <button type="button" data-z="fit" aria-label="Fit the map to the screen" title="Fit to screen"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </div>
   </section>
+  <div class="gutter" id="gut1" role="separator" aria-orientation="vertical" aria-controls="panel" aria-label="Resize the sidebar" tabindex="0"></div>
   <aside class="panel" id="panel" aria-label="Details">
     <div class="sheethead"><button class="grip" id="grip" type="button" aria-label="Expand or collapse the details"><i></i></button><button class="iconbtn" id="sheetClose" type="button" aria-label="Close details"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button></div>
     <div class="pin" id="pin"><p class="empty">Loading…</p></div>
   </aside>
+  <div class="gutter" id="gut2" role="separator" aria-orientation="vertical" aria-controls="panel2" aria-label="Resize the second sidebar" tabindex="0" hidden></div>
+  <aside class="panel" id="panel2" aria-label="Second sidebar" hidden><div class="pin" id="pin2"></div></aside>
 </main>
 
 <script>
@@ -899,7 +913,7 @@ function panBy(dx, dy) {
     else if (z) zoomAt(z === 'in' ? 1.3 : 1 / 1.3, cv.clientWidth / 2, cv.clientHeight / 2);
   });
   let rs;
-  window.addEventListener('resize', () => { clearTimeout(rs); rs = setTimeout(() => { if (cam.fitted) fitCam(); else { clampCam(); applyCam(); } updateReviewButton(); }, 100); });
+  window.addEventListener('resize', () => { clearTimeout(rs); rs = setTimeout(() => { applyWidths(); updateReviewButton(); }, 100); });
 }
 
 /** The folders from the project's root down to the current one, as the map shows them. */
@@ -941,8 +955,8 @@ function closeFolderMenu() {
 }
 $('#lcur').addEventListener('click', () => $('#lmenu').hidden ? openFolderMenu() : closeFolderMenu());
 document.addEventListener('click', e => { if (!e.target.closest('#lcur')) closeFolderMenu(); });
-/** Back, and an optional control on the right. */
-const panelTop = (extra = '') => `<div class="ptop"><button class="back" data-action="back">← Back</button>${extra}</div>`;
+/** Back (Close in the second sidebar), and an optional control on the right. */
+const panelTop = (extra = '') => `<div class="ptop">${out.id === 'pin2' ? '<button class="back" data-action="close-side">✕ Close</button>' : '<button class="back" data-action="back">← Back</button>'}${extra}</div>`;
 
 /* ---------- Panel helpers ---------- */
 const TOK = /(\/\/.*$)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)|(@[A-Za-z_]\w*)|\b(import|export|from|class|const|let|var|return|async|await|private|public|protected|readonly|constructor|new|if|else|throw|this|function|extends|implements|interface|type|static|for|of|in|true|false|null|undefined)\b/g;
@@ -996,7 +1010,7 @@ function renderSummary() {
   const section = (title, items, render, warn) => `<h3>${title}<span class="count ${warn && items.length ? 'warn' : ''}">${items.length}</span></h3>${items.length ? `<div class="check">${items.map(render).join('')}</div>` : '<p class="ok">None</p>'}`;
   const sigs = C.signatureChanges.filter(s => s.callersOutsidePr.length);
   const changedSyms = D.nodes.filter(n => n.change && n.kind !== 'file' && !n.test);
-  $('#pin').innerHTML = `
+  out.innerHTML = `
     <h2>${esc(title())}</h2>
     <p class="path">${esc(D.root)}</p>
     <div class="stats">
@@ -1020,7 +1034,7 @@ function renderSummary() {
     ${changedFiles().map(f => fileSection(f, true)).join('')}
     <h3>Changed modules</h3><ul class="mlist">${changed.map(li).join('')}</ul>
     ${affected.length ? `<h3>Not changed, but use changed code</h3><ul class="mlist">${affected.map(li).join('')}</ul>` : ''}
-    <p class="foot">Open a folder in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Arrows are imports between files and folders, and <code>@Module</code> imports between the folders of two modules; dotted ones are type-only. Blue arrows are new in this PR, purple ones are part of a circular module dependency that already existed, dark red ones are new links that close a circular module dependency, faint red ones were already there and are now part of one, orange ones are removed. The same colors mark circular imports between files. <b>⟳ cycle</b> on a folder: a circular module dependency or circular file imports inside it.</p>`;
+    <p class="foot">Open a folder in the map, a check above, or search for any symbol. References are exact (resolved by the TypeScript compiler) and include the whole codebase, not just the files in this PR. Arrows are imports between files and folders, and <code>@Module</code> imports between the folders of two modules; dotted ones are type-only. Blue arrows are new in this PR, purple ones are part of a circular module dependency that already existed, dark red ones are new links that close a circular module dependency, faint red ones were already there and are now part of one, orange ones are removed. The same colors mark circular imports between files. <b>⟳ cycle</b> on a folder: a circular module dependency or circular file imports inside it. ${isMac ? '⌘-click' : 'Alt-click'} a box or link to open it in a second sidebar next to this one; drag a sidebar's left border to resize it.</p>`;
 }
 
 /* ---------- Review comments ---------- */
@@ -1158,6 +1172,7 @@ function loadViewed() {
 }
 function setViewed(path, on) {
   if (on) viewed.add(path); else viewed.delete(path);
+  for (const x of document.querySelectorAll('[data-viewed]')) if (x.dataset.viewed === path) x.checked = on;
   try { localStorage.setItem(viewedKey(), JSON.stringify([...viewed])); } catch { /* storage unavailable */ }
   if (FG) markUnviewed(FG.nodes);
   renderGraph();
@@ -1213,7 +1228,7 @@ function renderModule(id) {
   const broken = D.checks.danglingReferences.filter(d => byId.get(d.from)?.module === id);
   const files = n.files.slice().sort(bySize).map(f => fileSection(f)).join('');
   const routes = D.nodes.filter(s => s.module === id && s.route);
-  $('#pin').innerHTML = `
+  out.innerHTML = `
     ${panelTop()}
     <h2>${esc(n.name)}</h2><p class="path">${esc(m.file || n.id)}</p>
     <p class="lead">${esc(why)}</p>${declHtml}
@@ -1231,7 +1246,7 @@ function renderFolder(dir) {
   const changed = inFolder.filter(f => f.change).sort(bySize);
   const affected = inFolder.filter(f => !f.change && (nodesByFile.get(f.path) || []).some(n => n.uses.some(u => byId.get(u)?.change)));
   const a = changed.reduce((x, f) => x + f.change.additions, 0), d = changed.reduce((x, f) => x + f.change.deletions, 0);
-  $('#pin').innerHTML = `
+  out.innerHTML = `
     ${panelTop()}
     <h2>${esc(folderName(dir))}</h2><p class="path">${esc((dir || '.') + '/')}</p>
     <p class="lead">${changed.length ? `${plural(changed.length, 'file')} of ${inFolder.length} changed in this folder and below.` : `None of its ${plural(inFolder.length, 'file')} changed in this PR.`}</p>
@@ -1268,7 +1283,7 @@ function renderSymbol(id) {
   const file = n.kind === 'file' ? fileByPath.get(n.file) : null;
   const fc = file && (C.fileCycles || []).find(c => c.includes(file.path));
   const fcNew = fc && C.newFileCycles.some(c => c.join('|') === fc.join('|'));
-  $('#pin').innerHTML = `
+  out.innerHTML = `
     ${panelTop(file?.change ? viewedSwitch(file.path) : '')}
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
     <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button></p>
@@ -1289,7 +1304,17 @@ function renderSymbol(id) {
 }
 
 /* ---------- Navigation ---------- */
-let view = { type: 'summary' };
+let view = { type: 'summary' }, out = $('#pin');
+/** Render a view's details into a sidebar. */
+function renderView(v, el) {
+  out = el;
+  try {
+    if (v.type === 'summary') renderSummary();
+    else if (v.type === 'module') renderModule(v.id);
+    else if (v.type === 'folder') renderFolder(v.id);
+    else renderSymbol(v.id);
+  } finally { out = $('#pin'); }
+}
 function go(next, push = true) {
   if (push) history.push(view);
   view = next;
@@ -1304,10 +1329,7 @@ function go(next, push = true) {
     if (sym.kind === 'file') selected = sym.file;
     else for (const x of [sym.id, ...sym.references, ...sym.uses]) { const k = keyOf(byId.get(x)?.file); if (k) hot.add(k); }
   }
-  if (view.type === 'summary') renderSummary();
-  else if (view.type === 'module') renderModule(view.id);
-  else if (view.type === 'folder') renderFolder(view.id);
-  else renderSymbol(view.id);
+  renderView(view, $('#pin'));
   renderGraph();
   $('#panel').scrollTop = 0;
   $('#sheetBtn').setAttribute('aria-label', `Open the details: ${view.type === 'summary' ? 'summary' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? folderName(view.id) : symLabel(view.id)}`);
@@ -1323,6 +1345,78 @@ function go(next, push = true) {
     fitBoxes([...boxPos.keys()].filter(k => !G.nodes.get(k)?.ext));
   }
 }
+
+/* ---------- Second sidebar ---------- */
+// ⌘-click (Alt-click off a Mac) opens a module, folder, file or symbol in a second sidebar, without
+// changing the map or the first sidebar. There is one: another one replaces it. A plain click in it
+// navigates as usual.
+const isMac = /Mac|iPhone|iPad/.test(navigator.userAgentData?.platform || navigator.platform || '');
+const sideClick = e => isMac ? e.metaKey : e.altKey;
+let side = null;
+const refit = () => { if (cam.fitted) fitCam(); else { clampCam(); applyCam(); } };
+function openSide(v) {
+  side = v;
+  renderView(v, $('#pin2'));
+  $('#panel2').hidden = $('#gut2').hidden = false;
+  $('#panel2').scrollTop = 0;
+  $('main').classList.add('two');
+  applyWidths();
+}
+function closeSide() {
+  if (!side) return;
+  side = null;
+  $('#panel2').hidden = $('#gut2').hidden = true;
+  $('#pin2').innerHTML = '';
+  $('main').classList.remove('two');
+  applyWidths();
+}
+
+/* ---------- Sidebar widths ---------- */
+// Drag the border left of a sidebar (or focus it and use the arrow keys) to resize it; a double-click
+// resets it. The widths are remembered in this browser and shrink to leave the map some room.
+const MIN_W = 280, MAP_MIN = 320, DEFAULT_W = { w1: 500, w2: 440 };
+let widths = { ...DEFAULT_W };
+try { Object.assign(widths, JSON.parse(localStorage.getItem('dyff-widths') || '{}')); } catch { /* storage unavailable */ }
+function applyWidths() {
+  let { w1, w2 } = widths;
+  const room = window.innerWidth - MAP_MIN, total = side ? w1 + w2 : w1;
+  if (total > room) { const k = Math.max(0, room) / total; w1 = Math.max(MIN_W, w1 * k); w2 = Math.max(MIN_W, w2 * k); }
+  const m = $('main');
+  m.style.setProperty('--w1', Math.round(w1) + 'px');
+  m.style.setProperty('--w2', Math.round(w2) + 'px');
+  refit();
+}
+function setWidth(key, w) {
+  widths[key] = Math.max(MIN_W, Math.round(w));
+  try { localStorage.setItem('dyff-widths', JSON.stringify(widths)); } catch { /* storage unavailable */ }
+  applyWidths();
+}
+for (const [id, key] of [['#gut1', 'w1'], ['#gut2', 'w2']]) {
+  const g = $(id), panel = () => g.nextElementSibling;
+  let x0 = null, w0 = 0;
+  g.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    x0 = e.clientX; w0 = panel().offsetWidth;
+    g.setPointerCapture(e.pointerId);
+    g.classList.add('drag'); document.body.classList.add('resizing');
+  });
+  g.addEventListener('pointermove', e => {
+    if (x0 === null) return;
+    // The sidebar is right of its border: dragging left widens it, up to what leaves the map its room.
+    const other = key === 'w1' ? (side ? $('#panel2').offsetWidth : 0) : $('#panel').offsetWidth;
+    setWidth(key, Math.min(w0 - (e.clientX - x0), window.innerWidth - MAP_MIN - other));
+  });
+  const end = () => { if (x0 === null) return; x0 = null; g.classList.remove('drag'); document.body.classList.remove('resizing'); };
+  g.addEventListener('pointerup', end);
+  g.addEventListener('pointercancel', end);
+  g.addEventListener('dblclick', () => setWidth(key, DEFAULT_W[key]));
+  g.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    setWidth(key, panel().offsetWidth + (e.key === 'ArrowLeft' ? 24 : -24));
+  });
+}
+applyWidths();
 
 /* ---------- Bottom sheet (phones) ---------- */
 function openSheet(full) {
@@ -1376,7 +1470,10 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-mod],[data-sym],[data-action],[data-folder]');
   if (!b || b.disabled) return;
   if (b.closest('#results')) closeSearch();
+  const v = b.dataset.folder !== undefined ? { type: 'folder', id: b.dataset.folder, folder: b.dataset.folder } : b.dataset.sym ? { type: 'symbol', id: b.dataset.sym } : b.dataset.mod ? { type: 'module', id: b.dataset.mod } : null;
+  if (v && sideClick(e) && !isMobile()) { e.preventDefault(); openSide(v); return; }
   if (b.dataset.action === 'back') back();
+  else if (b.dataset.action === 'close-side') closeSide();
   else if (b.dataset.action === 'show-all') { showAll = $('#showAll').checked = true; renderGraph(); }
   else if (b.dataset.folder !== undefined) go({ type: 'folder', id: b.dataset.folder, folder: b.dataset.folder });
   // A second click on the selected file box deselects it.
@@ -1402,10 +1499,11 @@ const hoverLinks = id => {
 $('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#canvas').addEventListener('mouseleave', () => hoverLinks(null));
 $('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
-$('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); });
+$('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); if (side) renderView(side, $('#pin2')); });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || document.activeElement === $('#q') || e.target.closest?.('textarea')) return;
   if (!$('#lmenu').hidden) { closeFolderMenu(); return; }
+  if (side) { closeSide(); return; }
   if (view.type !== 'summary') back();
   else if (isMobile()) closeSheet();
 });
@@ -1461,6 +1559,7 @@ function useIndex(data) {
   selected = null;
   build();
   history = [];
+  closeSide();
   go(keptView(prev), false);
 }
 function renderCommits() {
