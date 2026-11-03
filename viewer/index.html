@@ -231,7 +231,8 @@ details.file>summary.fhead:hover{background:var(--line)}
 .linkbtn{border:0;background:none;color:var(--accent);padding:0;font-size:13px}
 .linkbtn:hover{text-decoration:underline}
 .diff{border:1px solid var(--line);border-radius:8px;overflow-x:auto;background:var(--bg);font:12px/1.55 var(--mono)}
-.dl{display:grid;grid-template-columns:3.4em 3.4em 1.4em max-content;min-width:100%;width:max-content}
+/* Each row is the gutter's width wider than the diff, so every diff can start scrolled past its line numbers. */
+.dl{display:grid;grid-template-columns:3.4em 3.4em 1.4em max-content;min-width:calc(100% + 6.8em);width:max-content}
 .dl span{white-space:pre;padding:0 6px}
 .dl .ln{color:var(--com);text-align:right;user-select:none;padding:0 6px 0 0}
 .dl.add{background:var(--add-bg)} .dl.add .sg{color:var(--add)}
@@ -260,9 +261,12 @@ details.file>summary.fhead:hover{background:var(--line)}
 .hbtn{border:1px solid var(--stroke);background:var(--bg);border-radius:8px;padding:6px 12px;font-size:13px;font-weight:500}
 .hbtn:hover{border-color:var(--muted)}
 .dl{position:relative}
-.cadd{position:absolute;left:2px;top:50%;transform:translateY(-50%);width:18px;height:18px;padding:0;border:0;border-radius:5px;background:var(--accent);color:var(--surface);font:600 14px/18px var(--sans);opacity:0}
-.dl:hover .cadd,.cadd:focus-visible{opacity:1}
-@media (hover: none){.cadd{opacity:.55}}
+.cadd{position:absolute;left:81px;top:50%;transform:translateY(-50%);width:18px;height:18px;padding:0;border:0;border-radius:5px;background:var(--accent);color:var(--surface);font:600 14px/18px var(--sans);opacity:0}
+.cadd:focus-visible{opacity:1}
+/* Only where there is real hover: touch browsers keep :hover on the last tapped line. */
+@media (hover: hover){.dl:hover .cadd{opacity:1}}
+/* Touchscreens have no hover: a tapped line shows its button, and a hidden one can't be hit by accident. */
+@media (hover: none){.cadd{pointer-events:none}.dl.tapped .cadd{opacity:1;pointer-events:auto}}
 .cthread{position:sticky;left:0;font-family:var(--sans);font-size:13px}
 .cthread:empty{display:none}
 .cthread>div{margin:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:8px 10px}
@@ -284,7 +288,8 @@ details.file>summary.fhead:hover{background:var(--line)}
 .seg button{border:0;background:none;padding:3px 10px;font-size:12.5px;color:var(--muted)}
 .seg button+button{border-left:1px solid var(--stroke)}
 .seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink);font-weight:500}
-.dl.focus{box-shadow:inset 3px 0 0 var(--accent)}
+/* On the sign column: the line numbers left of it start scrolled out of view. */
+.dl.focus .sg{box-shadow:inset 3px 0 0 var(--accent)}
 .dl.focus:not(.add):not(.del){background:var(--accent-soft)}
 .crow .ccode{display:block;margin:4px 0 0;padding:2px 6px;border-radius:4px;background:var(--surface-2);font-size:12px;white-space:pre-wrap;word-break:break-all;text-decoration:line-through;color:var(--muted)}
 
@@ -1000,6 +1005,20 @@ document.addEventListener('click', e => { if (!e.target.closest('#lcur')) closeF
 /** Back (Close in the second sidebar), and an optional control on the right. */
 const panelTop = (extra = '') => `<div class="ptop">${out.id === 'pin2' ? '<button class="back" data-action="close-side">✕ Close</button>' : '<button class="back" data-action="back">← Back</button>'}${extra}</div>`;
 
+/** Scroll each diff past its line-number columns; they are still there to the left. A diff in a closed
+ * <details> can't scroll yet: it is done when it opens. */
+function hideGutters(root) {
+  for (const d of root.querySelectorAll('.diff')) {
+    if (d.dataset.gut || !d.getClientRects().length) continue;
+    const row = d.querySelector('.dl');
+    if (!row) continue;
+    d.scrollLeft = row.children[0].offsetWidth + row.children[1].offsetWidth;
+    d.dataset.gut = '1';
+  }
+}
+// toggle doesn't bubble, so it is caught on the way down.
+document.addEventListener('toggle', e => { if (e.target.open) hideGutters(e.target); }, true);
+
 /* ---------- Panel helpers ---------- */
 const TOK = /(\/\/.*$)|('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)|(@[A-Za-z_]\w*)|\b(import|export|from|class|const|let|var|return|async|await|private|public|protected|readonly|constructor|new|if|else|throw|this|function|extends|implements|interface|type|static|for|of|in|true|false|null|undefined)\b/g;
 function hl(text) {
@@ -1289,6 +1308,14 @@ document.addEventListener('click', e => {
     refreshReviewList();
   }
 });
+// Touchscreens: tapping a diff line shows its comment button (one line at a time); tapping it again hides it.
+document.addEventListener('click', e => {
+  if (!matchMedia('(hover: none)').matches || e.target.closest('.cadd')) return;
+  const row = e.target.closest('.diff .dl');
+  const was = document.querySelector('.dl.tapped');
+  was?.classList.remove('tapped');
+  if (row && row !== was && row.querySelector('.cadd')) row.classList.add('tapped');
+});
 document.addEventListener('keydown', e => {
   const f = e.target.closest?.('.cform');
   if (!f) return;
@@ -1467,6 +1494,7 @@ function renderView(v, el) {
     else if (v.type === 'folder') renderFolder(v.id);
     else renderSymbol(v.id);
     if (feed) fillSources(el);
+    hideGutters(el);
   } finally { out = $('#pin'); }
 }
 function go(next, push = true) {
@@ -1884,6 +1912,8 @@ function fillSources(el) {
           rows[at[0]].scrollIntoView({ block: 'center' });
         }
       }
+      // After scrolling to a symbol, which can scroll the diff sideways too.
+      hideGutters(box);
     }, () => { if (box.isConnected) box.innerHTML = '<p class="note">Could not load this file.</p>'; });
   }
 }
