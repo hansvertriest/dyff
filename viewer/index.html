@@ -1331,17 +1331,25 @@ document.addEventListener('change', e => { const p = e.target.dataset?.viewed; i
 /* ---------- Files ---------- */
 const bySize = (a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions);
 /** A changed file: its changed symbols with their own diffs, then the whole file diff. */
+const isVue = p => p.endsWith('.vue');
 function fileSection(f, collapsed = false) {
   const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
-  const symHtml = syms.map(s => {
-    const c = counts(s.change.hunks);
-    return `<details class="sym"${syms.length <= 4 ? ' open' : ''}><summary><span class="sname">${esc(s.kind === 'file' ? 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
-      <div class="sbody">${diffBlock(s.change.hunks, f.path, s.id)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
+  // A .vue file's <template> and <style> blocks belong to no symbol: they get a section each, around the script's symbols.
+  const sections = f.change.sections || [], open = syms.length + sections.length <= 4 ? ' open' : '';
+  const sectionHtml = name => sections.filter(x => x.name === name).map(x => {
+    const c = counts(x.hunks);
+    return `<details class="sym"${open}><summary><span class="sname">${name === 'template' ? 'Template' : 'Styles'}</span><span class="kind">changed</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
+      <div class="sbody">${diffBlock(x.hunks, f.path, f.path)}</div></details>`;
   }).join('');
+  const symHtml = sectionHtml('template') + syms.map(s => {
+    const c = counts(s.change.hunks);
+    return `<details class="sym"${open}><summary><span class="sname">${esc(s.kind === 'file' ? isVue(f.path) ? 'Script: imports and top level' : 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
+      <div class="sbody">${diffBlock(s.change.hunks, f.path, s.id)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
+  }).join('') + sectionHtml('style');
   const ch = f.change;
   const head = `<span class="badge b-${ch.status}">${statusWord(ch.status)}</span>${f.test ? '<span class="badge b-test">test</span>' : ''}${f.other ? '<span class="badge">not analyzed</span>' : ''}<span class="fname">${esc(baseOf(f.path))} <span>${esc(dirOf(f.path))}</span></span><span class="n-a">+${ch.additions}</span><span class="n-d">−${ch.deletions}</span>`;
   const whole = !ch.hunks.length ? '<p class="note" style="padding:10px 12px;margin:0">No text diff (binary file, or only renamed).</p>'
-    : syms.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(ch.hunks, f.path)}</div></details>`
+    : syms.length || sections.length ? `<details class="whole"><summary>Whole file diff</summary><div class="sbody">${diffBlock(ch.hunks, f.path)}</div></details>`
     : `<div class="sbody" style="padding-top:12px">${diffBlock(ch.hunks, f.path)}</div>`;
   const body = `${ch.oldPath ? `<p class="note" style="padding:6px 12px 0;margin:0">Renamed from ${esc(ch.oldPath)}</p>` : ''}${symHtml}${whole}`;
   return collapsed

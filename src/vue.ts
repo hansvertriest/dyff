@@ -8,6 +8,8 @@ export const isVueFile = (p: string) => p.endsWith('.vue');
 interface Block {
   tag: string;
   attrs: string;
+  /** Offset of the open tag. */
+  open: number;
   /** Content offsets, between the open and close tag. */
   start: number;
   end: number;
@@ -42,10 +44,16 @@ function blocks(text: string): Block[] {
       end = text.toLowerCase().indexOf(`</${tag}`, start);
     }
     if (end < 0) break;
-    out.push({ tag, attrs: m[2] ?? '', start, end });
+    out.push({ tag, attrs: m[2] ?? '', open: m.index, start, end });
     open.lastIndex = text.indexOf('>', end) + 1 || text.length;
   }
   return out;
+}
+
+/** The lines of each top-level block of a single-file component, open and close tag included. */
+export function vueBlockLines(text: string): { tag: string; range: [number, number] }[] {
+  const lineAt = (offset: number) => text.slice(0, offset).split('\n').length;
+  return blocks(text).map((b) => ({ tag: b.tag, range: [lineAt(b.open), lineAt(b.end)] }));
 }
 
 const PLAIN_ATTR = /^(?:v-(?:if|else-if|show|for|model|html|text|bind|on)(?::[\w.-]+)?|[:@][\w.:-]+|v-bind|v-on)$/;

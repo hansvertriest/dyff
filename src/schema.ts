@@ -172,6 +172,8 @@ export interface FileInfo {
     hunks: Hunk[];
     /** Imports on the base side, with renamed paths mapped to their new path. Only in a merged index; absent for added files. */
     previousImports?: FileImport[];
+    /** A .vue file's changed <template> and <style> blocks, each with its own hunks (they belong to no symbol). */
+    sections?: { name: 'template' | 'style'; hunks: Hunk[] }[];
   };
 }
 

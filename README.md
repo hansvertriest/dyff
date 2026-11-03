@@ -19,7 +19,7 @@ The analysis uses the TypeScript compiler (via [ts-morph](https://ts-morph.com))
 `.vue` single-file components are indexed next to the `.ts` files:
 
 - the `<script>` and `<script setup>` blocks are analyzed with the type checker, so top-level functions and variables become nodes at their real line numbers
-- the template counts as a reference from the component to every component it renders (`<OrderRow>` or `<order-row>`) and every name it uses in bindings, events and `{{ }}`. A change to the template or styles marks the component as modified
+- the template counts as a reference from the component to every component it renders (`<OrderRow>` or `<order-row>`) and every name it uses in bindings, events and `{{ }}`. A change to the template or styles marks the component as modified, and shows as its own Template or Styles diff next to the script's symbols
 - vue-router route records (`{ path: '/orders/:id', component: ... }`, including `children` and lazy `() => import('./X.vue')`) are entry points, so a changed composable is followed up to the pages that use it: `formatTotal → OrderRow.vue → OrderDetail.vue → PAGE /orders/:id`
 - a Vite `tsconfig.json` that only lists `references` is followed to `tsconfig.app.json` for path aliases such as `@/*`
 

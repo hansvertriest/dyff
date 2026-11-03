@@ -156,6 +156,15 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.deepEqual(fromDiff.pr.deletedSymbols.map((s) => s.id), overlay.pr.deletedSymbols.map((s) => s.id));
   });
 
+  it("gives a file's own node only the lines no symbol holds: imports and top-level code", () => {
+    const changed = (hunks) => hunks.flatMap((h) => h.lines.filter((l) => l.t !== ' ').map((l) => l.t + l.text.trim()));
+    const lines = changed(node(merged, 'src/users/users.service.ts').change.hunks);
+    assert.deepEqual(lines, ["+import * as bcrypt from 'bcrypt';"]);
+    // The method changes stay with the methods.
+    assert.ok(changed(merged.files.find((f) => f.path === 'src/users/users.service.ts').change.hunks).length > lines.length);
+    assert.equal(node(merged, 'src/orders/orders.service.ts').change, undefined);
+  });
+
   it('finds references the PR broke', () => {
     // A .json import is a use of a file dyffle never indexes; it is not broken.
     assert.ok(node(merged, 'src/reports/report-labels.ts#reportTitle').uses.includes('src/reports/report-labels.json'));
@@ -408,6 +417,16 @@ describe('Vue fixture: single-file components and vue-router routes', () => {
       ['/orders', ['src/views/OrdersView.vue']],
       ['/orders/:id', ['src/views/OrderDetail.vue']],
     ]);
+  });
+
+  it("gives a .vue file's template and styles a diff of their own", () => {
+    const file = merged.files.find((f) => f.path === 'src/views/OrdersView.vue');
+    assert.deepEqual(
+      file.change.sections.map((x) => [x.name, x.hunks.flatMap((h) => h.lines.filter((l) => l.t !== ' ').map((l) => l.t + l.text.trim()))]),
+      [['template', ['-<h1>Orders</h1>', '+<h1>Your orders</h1>']]],
+    );
+    // The template is not the script's top-level code.
+    assert.deepEqual(node(merged, 'src/views/OrdersView.vue').change.hunks, []);
   });
 
   it('follows changed composables and template-only changes up to the pages', () => {

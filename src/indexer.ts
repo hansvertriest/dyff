@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { Analyzer, type FileAnalysis, type ProjectOptions } from './analyzer.js';
-import { deletedText, parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './diff.js';
+import { deletedText, filterHunks, hunksWithin, parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './diff.js';
 import { finalize, moduleAssigner } from './finalize.js';
 import { diffAgainst, headCommit, mergeBase, showFile } from './git.js';
 import { SCHEMA_VERSION, type FileInfo, type Index, type IndexKind, type PrInfo, type SymbolNode } from './schema.js';
 import { collectFile, compactSignature } from './symbols.js';
-import { isVueFile, parseSource } from './vue.js';
+import { isVueFile, parseSource, vueBlockLines } from './vue.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
 
@@ -140,13 +140,23 @@ export function buildOverlay(opts: OverlayOptions): Index {
         if (id !== n.id) pr.renamedSymbols[n.id] = id;
       }
     }
-    const fileChange = {
+    const fileChange: NonNullable<FileInfo['change']> = {
       status: df.status,
       ...(df.status === 'renamed' ? { oldPath } : {}),
       additions: df.additions,
       deletions: df.deletions,
       hunks: df.hunks,
     };
+    // A file's own lines are the ones no symbol holds (imports and other top-level code), and in a
+    // .vue file only those inside <script>: the template and styles get sections of their own.
+    const vueBlocks = (text: string | undefined) => (text !== undefined && isVueFile(df.path) ? vueBlockLines(text) : undefined);
+    const ownLines = (symbols: [number, number][], blocks: ReturnType<typeof vueBlocks>) => {
+      const scripts = blocks?.filter((b) => b.tag === 'script').map((b) => b.range);
+      const inAny = (rs: [number, number][], x: number) => rs.some((r) => x >= r[0] && x <= r[1]);
+      return (x?: number) => x != null && !inAny(symbols, x) && (!scripts || inAny(scripts, x));
+    };
+    const oldBlocks = vueBlocks(oldText);
+    const oldOwn = ownLines([...oldNodes.values()].filter((n) => n.kind !== 'file').map((n) => n.range), oldBlocks);
 
     if (df.status === 'removed') {
       index.files.push({ path: df.path, module: '', test: false, hash: '', imports: [], change: fileChange });
@@ -155,11 +165,20 @@ export function buildOverlay(opts: OverlayOptions): Index {
       addAnalysis(index, r);
       (index.files[index.files.length - 1] as FileInfo).change = fileChange;
       const added = index.nodes.slice(index.nodes.length - r.nodes.length);
+      const newBlocks = vueBlocks(a.text(df.path)?.replace(/\r\n/g, '\n'));
+      const newOwn = ownLines(added.filter((n) => n.kind !== 'file').map((n) => n.range), newBlocks);
+      const hunksOf = (n: SymbolNode, oldRange?: [number, number]) =>
+        n.kind === 'file' ? filterHunks(df.hunks, (l) => (l.t === '-' ? oldOwn(l.o) : newOwn(l.n))) : sliceHunks(df.hunks, n.range, oldRange);
+      for (const tag of ['template', 'style'] as const) {
+        const ranges = (bs: ReturnType<typeof vueBlocks>) => (bs ?? []).filter((b) => b.tag === tag).map((b) => b.range);
+        const hunks = hunksWithin(df.hunks, ranges(newBlocks), ranges(oldBlocks));
+        if (hunks.length) (fileChange.sections ??= []).push({ name: tag, hunks });
+      }
       for (const n of added) {
         const old = oldNodes.get(n.id);
         oldNodes.delete(n.id);
         if (!old) {
-          n.change = { status: 'added', hunks: sliceHunks(df.hunks, n.range, undefined) };
+          n.change = { status: 'added', hunks: hunksOf(n) };
           continue;
         }
         if (old.hash === n.hash) continue;
@@ -167,7 +186,7 @@ export function buildOverlay(opts: OverlayOptions): Index {
         const sigChanged = compactSignature(old.signature) !== compactSignature(n.signature);
         n.change = {
           status: 'modified',
-          hunks: sliceHunks(df.hunks, n.range, old.range),
+          hunks: hunksOf(n, old.range),
           previousRange: old.range,
           ...renamedFrom,
           ...(sigChanged ? { signatureChanged: true, previousSignature: old.signature ?? '' } : {}),

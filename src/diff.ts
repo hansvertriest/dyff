@@ -156,11 +156,20 @@ export function sliceHunks(
 ): Hunk[] {
   const inNew = (n?: number) => range != null && n != null && n >= range[0] && n <= range[1];
   const inOld = (o?: number) => oldRange != null && o != null && o >= oldRange[0] && o <= oldRange[1];
+  return filterHunks(hunks, (l) => (l.t === '+' ? inNew(l.n) : l.t === '-' ? inOld(l.o) : inNew(l.n) || (!range && inOld(l.o))));
+}
+
+/** Hunks of the lines inside the given line ranges (new side for added and context lines, old side for removed ones). */
+export function hunksWithin(hunks: Hunk[], newRanges: [number, number][], oldRanges: [number, number][]): Hunk[] {
+  const within = (rs: [number, number][], x?: number) => x != null && rs.some((r) => x >= r[0] && x <= r[1]);
+  return filterHunks(hunks, (l) => (l.t === '-' ? within(oldRanges, l.o) : within(newRanges, l.n)));
+}
+
+/** The lines of each hunk that `keep` picks; hunks left without a change are dropped. */
+export function filterHunks(hunks: Hunk[], keep: (l: DiffLine) => boolean): Hunk[] {
   const out: Hunk[] = [];
   for (const h of hunks) {
-    const lines: DiffLine[] = h.lines.filter((l) =>
-      l.t === '+' ? inNew(l.n) : l.t === '-' ? inOld(l.o) : inNew(l.n) || (!range && inOld(l.o)),
-    );
+    const lines: DiffLine[] = h.lines.filter(keep);
     if (!lines.some((l) => l.t !== ' ')) continue;
     const first = lines[0];
     const oldStart = lines.find((l) => l.o != null)?.o ?? first.o ?? h.oldStart;
