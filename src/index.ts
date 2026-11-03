@@ -7,4 +7,4 @@ export { fileEdges, findCycles, merge, moduleEdges, rebase, type MergeOptions } 
 export { EMBED_END, EMBED_START, embedSection, markdownReport, routeLabel, type ReportOptions } from './report.js';
 export { mermaidModuleMap, type MermaidOptions } from './mermaid.js';
 export { serve, standaloneHtml, type LabeledIndex, type LiveSource, type ServeOptions } from './serve.js';
-export { LiveSession, readPostInput, type Post, type PostInput, type WatchOptions } from './live.js';
+export { LiveSession, readPostInput, readReviewInput, reviewsMarkdown, type Post, type PostInput, type Review, type ReviewComment, type WatchOptions } from './live.js';

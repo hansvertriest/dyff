@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 
 const VIEWER = new URL('../viewer/index.html', import.meta.url);
 
@@ -26,6 +26,10 @@ export interface LiveSource {
   index(i: number): string | undefined;
   /** The feed as JSON. */
   feed(): string;
+  /** The review of the live branch ("live") or of a post ("post-<id>") as JSON, or undefined for an unknown key. */
+  review(key: string): string | undefined;
+  /** Store a review sent by a viewer; `client` identifies the page, so it can skip its own change. */
+  saveReview(key: string, json: string, client?: string): void;
   /** Call `send` on every change; returns a function that stops it. */
   subscribe(send: (event: string, data: unknown) => void): () => void;
 }
@@ -33,6 +37,23 @@ export interface LiveSource {
 export interface ServeOptions {
   port?: number;
   host?: string;
+}
+
+/** A request body as text, up to 1 MB. */
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > 1 << 20) {
+        reject(new Error('Request body over 1 MB'));
+        req.destroy();
+      } else chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
 }
 
 const isLive = (x: unknown): x is LiveSource => typeof x === 'object' && x !== null && 'subscribe' in x;
@@ -62,6 +83,18 @@ export function serve(indexJson: string | LabeledIndex<string>[] | LiveSource, o
       json(JSON.stringify(live ? live.labels() : fixed.map((x) => x.label)));
     } else if (index !== undefined) {
       json(index);
+    } else if (live && url.pathname === '/review.json' && req.method === 'PUT') {
+      readBody(req)
+        .then((body) => {
+          live.saveReview(url.searchParams.get('key') ?? '', body, url.searchParams.get('client') ?? undefined);
+          res.writeHead(204).end();
+        })
+        .catch((e: Error) => {
+          res.writeHead(400, { 'content-type': 'text/plain' });
+          res.end(e.message);
+        });
+    } else if (live && url.pathname === '/review.json' && live.review(url.searchParams.get('key') ?? '') !== undefined) {
+      json(live.review(url.searchParams.get('key') ?? '')!);
     } else if (live && url.pathname === '/feed.json') {
       json(live.feed());
     } else if (live && url.pathname === '/events') {

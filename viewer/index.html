@@ -276,6 +276,8 @@ details.file>summary.fhead:hover{background:var(--line)}
 .check .crow:first-child{border-top:0}
 .crow .main{flex:1;min-width:0}
 .crow .cbody{font-size:13px;margin:2px 0 0}
+.crow .outdated{color:var(--mod);font-weight:600}
+.crow .ccode{display:block;margin:4px 0 0;padding:2px 6px;border-radius:4px;background:var(--surface-2);font-size:12px;white-space:pre-wrap;word-break:break-all;text-decoration:line-through;color:var(--muted)}
 
 /* dyffle watch: the feed of posts and the live branch. */
 .post{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:10px 14px;margin:0 0 12px}
@@ -377,7 +379,7 @@ details.file>summary.fhead:hover{background:var(--line)}
   </div>
   <button id="liveStatus" type="button" hidden disabled></button>
   <button class="hbtn" id="feedBtn" type="button" hidden aria-label="Feed" title="Posts about the changes, newest first"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span class="lbl">Feed</span><span class="badge" hidden></span></button>
-  <button class="hbtn" id="dlReview" type="button" hidden title="A GitHub pull request review, with each comment's line of code and symbol for context"><svg class="mobile-only" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m0 0L4.5 6.5M8 10l3.5-3.5M3 13h10" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Download comments</span></button>
+  <button class="hbtn" id="copyReview" type="button" hidden title="Copy a GitHub pull request review as JSON, with each comment's line of code and symbol for context"><svg class="mobile-only" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M3 10.5V3.5A1 1 0 0 1 4 2.5h6.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span class="lbl">Copy comments</span></button>
   <button class="iconbtn mobile-only" id="searchBtn" type="button" aria-label="Search"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" stroke="currentColor" stroke-width="1.7" fill="none"/><path d="M11.5 11.5L16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
 </header>
 <main>
@@ -1012,7 +1014,7 @@ function diffBlock(hunks, path, sym) {
       const side = l.t === '-' ? 'LEFT' : 'RIGHT', line = l.t === '-' ? l.o : l.n;
       const add = path && line ? `<button class="cadd" type="button" data-c="add" aria-label="Comment on line ${line}" title="Comment on this line">+</button>` : '';
       html += `<div class="dl ${cls}"><span class="ln">${add}${l.o ?? ''}</span><span class="ln">${l.t === '-' ? '' : l.n ?? ''}</span><span class="sg">${l.t === ' ' ? '' : l.t === '-' ? '−' : '+'}</span><span>${hl(l.text) || ' '}</span></div>`;
-      if (add) html += `<div class="cthread" data-path="${esc(path)}" data-side="${side}" data-line="${line}">${threadHtml(path, side, line)}</div>`;
+      if (add) html += `<div class="cthread" data-path="${esc(path)}" data-side="${side}" data-line="${line}">${threadHtml(path, side, line, l.text || ' ')}</div>`;
     }
   });
   return html + '</div>';
@@ -1072,36 +1074,96 @@ function renderSummary() {
 /* ---------- Review comments ---------- */
 /** A stored value, falling back to its key from before the rename to dyffle. */
 const stored = key => localStorage.getItem(key) ?? localStorage.getItem(key.replace(/^dyffle-/, 'dyff-'));
-// Kept in this browser per head commit, so they survive reloads and a new `dyffle serve`.
+// Comments, the overall comment and viewed files. Served by dyffle watch they are kept in the
+// project (.dyffle/reviews/<key>.json), shared by every open page and readable by Claude; otherwise
+// in this browser per head commit, so they survive reloads and a new `dyffle serve`.
 let review = { body: '', comments: [] };
 const reviewKey = () => 'dyffle-review:' + (D.pr?.headCommit || D.root);
+/** The review of what is on the map, under dyffle watch: the live branch or a post. */
+const remoteKey = () => feedPost(current) ? `post-${feedPost(current).id}` : 'live';
+const clientId = Math.random().toString(36).slice(2, 10);
+let reviewLoads = 0, pending = null, saveTimer = null, saving = Promise.resolve(), shownKey = null;
 function loadReview() {
+  // A rebuilt live branch keeps showing its review while the server's copy loads.
+  if (!feed || remoteKey() !== shownKey) { review = { body: '', comments: [] }; viewed = new Map(); }
+  if (feed) { shownKey = remoteKey(); fetchReview(); updateReviewButton(); return; }
   try {
     const r = JSON.parse(stored(reviewKey()) || 'null');
     if (r && Array.isArray(r.comments)) review = { body: String(r.body || ''), comments: r.comments };
+    // Saved before diff hashes as a list of paths: viewed whatever their diff is now.
+    const v = JSON.parse(stored(viewedKey()) || 'null');
+    viewed = new Map(Array.isArray(v) ? v.map(p => [p, null]) : Object.entries(v || {}));
   } catch { /* storage unavailable */ }
   updateReviewButton();
 }
-function saveReview() {
-  try { localStorage.setItem(reviewKey(), JSON.stringify(review)); } catch { /* storage unavailable */ }
+function fetchReview() {
+  const n = ++reviewLoads;
+  // After any save still on its way, so it isn't overwritten by the copy from before it.
+  flushReview();
+  saving.then(() => fetchJson(`review.json?key=${remoteKey()}`)).then(r => {
+    if (n !== reviewLoads) return;
+    review = { body: String(r.body || ''), comments: Array.isArray(r.comments) ? r.comments : [] };
+    viewed = new Map(Object.entries(r.viewed || {}));
+    reviewChanged();
+  }).catch(() => {});
+}
+/** Show a review that came from the server, keeping the sidebar where it was. */
+function reviewChanged() {
+  const top = $('#panel').scrollTop;
+  renderView(view, $('#pin'));
+  if (side) renderView(side, $('#pin2'));
+  $('#panel').scrollTop = top;
+  if (FG) markUnviewed(FG.nodes);
+  renderGraph();
   updateReviewButton();
 }
+function flushReview() {
+  if (!pending) return;
+  const { key, doc } = pending;
+  pending = null;
+  clearTimeout(saveTimer);
+  saving = fetch(`review.json?key=${key}&client=${clientId}`, { method: 'PUT', body: doc, keepalive: true })
+    .then(r => r.ok || r.text().then(t => console.warn(`dyffle: review not saved: ${t}`)), () => console.warn('dyffle: review not saved'));
+}
+addEventListener('pagehide', flushReview);
+function saveReview() {
+  updateReviewButton();
+  if (feed) {
+    // Typing in the overall comment saves often: send the latest after a short pause.
+    const key = remoteKey();
+    if (pending && pending.key !== key) flushReview();
+    pending = { key, doc: JSON.stringify({ body: review.body, comments: review.comments, viewed: Object.fromEntries(viewed) }) };
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushReview, 300);
+    return;
+  }
+  try { localStorage.setItem(reviewKey(), JSON.stringify(review)); } catch { /* storage unavailable */ }
+}
 function updateReviewButton() {
-  const n = review.comments.length, b = $('#dlReview');
+  const n = review.comments.length, b = $('#copyReview');
   b.hidden = !n && !review.body.trim();
   // Phones show the icon and the count only.
-  b.querySelector('.lbl').textContent = isMobile() ? (n || '') : n ? `Download ${plural(n, 'comment')}` : 'Download review';
-  b.setAttribute('aria-label', n ? `Download ${plural(n, 'comment')}` : 'Download review');
+  b.querySelector('.lbl').textContent = isMobile() ? (n || '') : n ? `Copy ${plural(n, 'comment')}` : 'Copy review';
+  b.setAttribute('aria-label', n ? `Copy ${plural(n, 'comment')}` : 'Copy review');
 }
 const byPosition = (a, b) => a.path.localeCompare(b.path) || (a.side === b.side ? a.line - b.line : a.side === 'LEFT' ? -1 : 1) || a.created - b.created;
 const lineComments = (path, side, line) => review.comments.filter(c => c.path === path && c.side === side && c.line === +line);
+/** The text of a line in the diff of `path` as it is now, or undefined when the diff doesn't show it. */
+function lineText(path, side, line) {
+  for (const h of fileByPath.get(path)?.change?.hunks || [])
+    for (const l of h.lines)
+      if (side === 'LEFT' ? l.t === '-' && l.o === line : l.t !== '-' && l.n === line) return l.text || ' ';
+}
+/** A comment whose line now holds other code (the live branch changed under it). */
+const isOutdated = c => c.code !== undefined && lineText(c.path, c.side, c.line) !== c.code;
 const commentHtml = c => `<div class="cmt" data-id="${esc(c.id)}"><p class="cbody">${esc(c.body)}</p><div class="cact"><button class="linkbtn" type="button" data-c="edit">Edit</button><button class="linkbtn" type="button" data-c="del">Delete</button></div></div>`;
-const threadHtml = (path, side, line) => lineComments(path, side, line).map(commentHtml).join('');
+// Only comments made on this code: an outdated one is listed in the review, not on whatever the line holds now.
+const threadHtml = (path, side, line, code) => lineComments(path, side, line).filter(c => c.code === undefined || c.code === code).map(commentHtml).join('');
 const formHtml = (text = '', id = '') => `<div class="cform"${id ? ` data-id="${esc(id)}"` : ''}><textarea aria-label="Comment" placeholder="Comment on this line">${esc(text)}</textarea><div class="cact"><button class="primary" type="button" data-c="save">${id ? 'Save' : 'Comment'}</button><button class="linkbtn" type="button" data-c="cancel">Cancel</button><span class="hint">⌘/Ctrl+Enter to save</span></div></div>`;
 /** Re-render every thread of one line: the same line can show in a symbol's diff and in the whole file diff. */
 function refreshThreads(path, side, line) {
   for (const t of document.querySelectorAll(`.cthread[data-path="${CSS.escape(path)}"][data-side="${side}"][data-line="${line}"]`))
-    t.innerHTML = threadHtml(path, side, line);
+    t.innerHTML = threadHtml(path, side, line, t.previousElementSibling.lastElementChild.textContent);
 }
 function openForm(thread, text, id) {
   const f = thread.querySelector('.cform');
@@ -1138,14 +1200,14 @@ function refreshReviewList() {
 }
 function reviewList() {
   const cs = review.comments.slice().sort(byPosition);
-  return `<div id="reviewList">${cs.length ? `<div class="check">${cs.map(c => `<div class="crow"><span class="main"><span class="sub" style="font:12px var(--mono);color:var(--muted)">${esc(c.path)}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol && byId.has(c.symbol) && byId.get(c.symbol).kind !== 'file' ? ' · ' + esc(short(c.symbol)) : ''}</span><p class="cbody">${esc(c.body)}</p></span><button class="linkbtn" type="button" data-c="del-list" data-id="${esc(c.id)}">Delete</button></div>`).join('')}</div>` : '<p class="note">Hover a line in any diff below and click <b>+</b> to comment on it.</p>'}</div>`;
+  return `<div id="reviewList">${cs.length ? `<div class="check">${cs.map(c => `<div class="crow"><span class="main"><span class="sub" style="font:12px var(--mono);color:var(--muted)">${esc(c.path)}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol && byId.has(c.symbol) && byId.get(c.symbol).kind !== 'file' ? ' · ' + esc(short(c.symbol)) : ''}${isOutdated(c) ? ' · <b class="outdated">outdated</b>' : ''}</span>${isOutdated(c) && c.code?.trim() ? `<code class="ccode">${esc(c.code)}</code>` : ''}<p class="cbody">${esc(c.body)}</p></span><button class="linkbtn" type="button" data-c="del-list" data-id="${esc(c.id)}">Delete</button></div>`).join('')}</div>` : '<p class="note">Hover a line in any diff below and click <b>+</b> to comment on it.</p>'}</div>`;
 }
 function reviewSection() {
   return `<h3>Your review<span class="count" id="reviewCount">${review.comments.length}</span></h3>
     <textarea class="overall" id="overall" aria-label="Overall comment" placeholder="Overall comment (optional)">${esc(review.body)}</textarea>
     ${reviewList()}`;
 }
-function downloadReview() {
+function copyReview() {
   const pr = D.pr || {}, cs = review.comments.slice().sort(byPosition);
   // The body of GitHub's "create a review" call. Without an `event` it becomes a pending review to submit on GitHub.
   const out = {
@@ -1158,14 +1220,31 @@ function downloadReview() {
       ...(pr.baseCommit ? { baseCommit: pr.baseCommit } : {}),
       ...(pr.headCommit ? { headCommit: pr.headCommit } : {}),
       // Same order as `comments`: the commented line and the symbol it is in.
-      context: cs.map(c => ({ path: c.path, line: c.line, side: c.side, code: c.code, ...(c.symbol ? { symbol: c.symbol } : {}) })),
+      context: cs.map(c => ({ path: c.path, line: c.line, side: c.side, code: c.code, ...(c.symbol ? { symbol: c.symbol } : {}), ...(isOutdated(c) ? { outdated: true } : {}) })),
     },
   };
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2) + '\n'], { type: 'application/json' }));
-  a.download = `dyffle-review${pr.headCommit ? '-' + pr.headCommit.slice(0, 7) : ''}.json`;
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  copyText(JSON.stringify(out, null, 2) + '\n').then(ok => {
+    const lbl = $('#copyReview .lbl');
+    lbl.textContent = ok ? 'Copied' : 'Copy failed';
+    setTimeout(updateReviewButton, 1500);
+  });
+}
+/** Copy to the clipboard. Opened over plain http on another address the Clipboard API is missing, so fall back to a selection. */
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).then(() => true, () => fallbackCopy(text));
+  return Promise.resolve(fallbackCopy(text));
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { /* not allowed */ }
+  ta.remove();
+  return ok;
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-c]');
@@ -1191,31 +1270,36 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape') f.querySelector('[data-c="cancel"]').click();
 });
 document.addEventListener('input', e => { if (e.target.id === 'overall') { review.body = e.target.value; saveReview(); } });
-$('#dlReview').addEventListener('click', downloadReview);
+$('#copyReview').addEventListener('click', copyReview);
 
 /* ---------- Viewed files ---------- */
-// Changed files marked viewed, kept in this browser per head commit like the review comments.
-let viewed = new Set();
+// Changed files marked viewed, with a hash of their diff then: a file whose diff changed since
+// (the live branch moved on) counts as not viewed again. Kept with the review comments.
+let viewed = new Map(), diffHashes = new Map();
 const viewedKey = () => 'dyffle-viewed:' + (D.pr?.headCommit || D.root);
-function loadViewed() {
-  viewed = new Set();
-  try {
-    const v = JSON.parse(stored(viewedKey()) || 'null');
-    if (Array.isArray(v)) viewed = new Set(v);
-  } catch { /* storage unavailable */ }
+function diffHash(path) {
+  if (!diffHashes.has(path)) {
+    const c = fileByPath.get(path)?.change, s = JSON.stringify([c?.status, c?.hunks]);
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    diffHashes.set(path, (h >>> 0).toString(36));
+  }
+  return diffHashes.get(path);
 }
+const isViewed = path => viewed.has(path) && (viewed.get(path) === null || viewed.get(path) === diffHash(path));
 function setViewed(path, on) {
-  if (on) viewed.add(path); else viewed.delete(path);
-  for (const x of document.querySelectorAll('[data-viewed]')) if (x.dataset.viewed === path) x.checked = on;
-  try { localStorage.setItem(viewedKey(), JSON.stringify([...viewed])); } catch { /* storage unavailable */ }
+  if (on) viewed.set(path, diffHash(path)); else viewed.delete(path);
+  for (const x of document.querySelectorAll('[data-viewed]')) if (x.dataset.viewed === path) { x.checked = on; x.parentElement.lastChild.textContent = ' Viewed'; }
+  if (feed) saveReview();
+  else try { localStorage.setItem(viewedKey(), JSON.stringify(Object.fromEntries(viewed))); } catch { /* storage unavailable */ }
   if (FG) markUnviewed(FG.nodes);
   renderGraph();
 }
 /** Count, per box, the changed files in it that are not viewed yet. */
 function markUnviewed(nodes) {
-  for (const n of nodes.values()) n.unviewed = (n.files || []).filter(f => f.change && !viewed.has(f.path)).length;
+  for (const n of nodes.values()) n.unviewed = (n.files || []).filter(f => f.change && !isViewed(f.path)).length;
 }
-const viewedSwitch = path => `<label class="viewed"><input type="checkbox" role="switch" data-viewed="${esc(path)}"${viewed.has(path) ? ' checked' : ''}> Viewed</label>`;
+const viewedSwitch = path => `<label class="viewed"><input type="checkbox" role="switch" data-viewed="${esc(path)}"${isViewed(path) ? ' checked' : ''}> ${viewed.has(path) && !isViewed(path) ? 'Changed since viewed' : 'Viewed'}</label>`;
 document.addEventListener('change', e => { const p = e.target.dataset?.viewed; if (p !== undefined) setViewed(p, e.target.checked); });
 
 /* ---------- Files ---------- */
@@ -1634,13 +1718,13 @@ function postHtml(p, inFeed = true) {
     <div class="phead"><b>${esc(p.author)}</b><span>#${p.id}</span><time datetime="${esc(p.createdAt)}" title="${esc(new Date(p.createdAt).toLocaleString())}">${ago(p.createdAt)}</time></div>
     ${p.title ? `<h4>${esc(p.title)}</h4>` : ''}
     <div class="md">${md(p.message)}</div>
-    ${p.index !== undefined && inFeed ? `<button class="postchg${on ? ' on' : ''}" type="button" data-index="${p.index}"><span>${statsText(p.stats)}</span><span class="go">${on ? 'On the map' : 'View change →'}</span></button>` : p.note && inFeed ? `<p class="note">${esc(p.note)}</p>` : ''}
+    ${p.index !== undefined && inFeed ? `<button class="postchg${on ? ' on' : ''}" type="button" data-index="${p.index}"><span>${statsText(p.stats)}${p.comments ? ` · ${plural(p.comments, 'comment')}` : ''}</span><span class="go">${on ? 'On the map' : 'View change →'}</span></button>` : p.note && inFeed ? `<p class="note">${esc(p.note)}</p>` : ''}
   </article>`;
 }
 function renderFeed() {
   const posts = [...feed.posts].reverse();
   out.innerHTML = `<h2>Feed</h2>
-    <div class="feedlive"><button class="postchg${current === 0 ? ' on' : ''}" type="button" data-index="0"><span><b>Whole branch</b>, live · updated ${feed.live.generatedAt ? ago(feed.live.generatedAt) : '–'}</span><span class="go">${current === 0 ? 'On the map' : 'View →'}</span></button></div>
+    <div class="feedlive"><button class="postchg${current === 0 ? ' on' : ''}" type="button" data-index="0"><span><b>Whole branch</b>, live · updated ${feed.live.generatedAt ? ago(feed.live.generatedAt) : '–'}${feed.live.comments ? ` · ${plural(feed.live.comments, 'comment')}` : ''}</span><span class="go">${current === 0 ? 'On the map' : 'View →'}</span></button></div>
     ${posts.length ? posts.map(p => postHtml(p)).join('') : '<p class="note">No posts yet. Claude posts here with <code>dyffle post</code>, or by writing a JSON file to <code>.dyffle/inbox/</code>.</p>'}`;
   seen = feed.posts.length;
 }
@@ -1694,6 +1778,14 @@ function startLive() {
   let connected = false;
   es.addEventListener('live', () => { feed.live.generatedAt = new Date().toISOString(); refreshLive(); if (current !== 0 && view.type === 'feed') renderView(view, $('#pin')); });
   es.addEventListener('feed', () => loadFeed().catch(() => {}));
+  es.addEventListener('review', e => {
+    const r = JSON.parse(e.data);
+    // Another page changed this review: show it, unless a comment is being written here.
+    if (r.client !== clientId && r.key === remoteKey() && !document.querySelector('.cform') && document.activeElement?.id !== 'overall') fetchReview();
+    if (r.key === 'live') feed.live.comments = r.comments;
+    else { const p = feed.posts.find(x => `post-${x.id}` === r.key); if (p) p.comments = r.comments; }
+    if (view.type === 'feed') { const top = $('#panel').scrollTop; renderView(view, $('#pin')); $('#panel').scrollTop = top; }
+  });
   es.addEventListener('status', e => { if (!liveDirty) setStatus(JSON.parse(e.data).building ? 'Updating…' : ''); });
   // A restarted dyffle watch: pick up what changed while the page was disconnected.
   es.addEventListener('open', () => { if (connected) loadFeed().then(refreshLive).catch(() => {}); connected = true; });
@@ -1721,8 +1813,8 @@ function useIndex(data, next) {
   $('#prTitle').innerHTML = `${esc(baseOf(D.root))} · ${esc(title())}${pr.headCommit ? `<small>${esc(pr.baseCommit?.slice(0, 7) || '')}…${esc(pr.headCommit.slice(0, 7))}</small>` : ''}`;
   document.title = `dyffle · ${baseOf(D.root)}`;
   review = { body: '', comments: [] };
+  diffHashes = new Map();
   loadReview();
-  loadViewed();
   searchIndex = [
     ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
     ...D.modules.map(m => ({ mod: m.id, label: m.name, sub: m.id, key: (m.name + ' ' + m.id).toLowerCase() })),

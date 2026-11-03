@@ -105,15 +105,17 @@ dyffle serve "${files[@]}"
 
 ### Review comments
 
-In `dyffle serve` or a `dyffle html` page, hover any diff line and click **+** to comment on it. The summary lists your comments and has a box for an overall comment. Comments stay in your browser, per head commit, until you delete them.
+In `dyffle serve` or a `dyffle html` page, hover any diff line and click **+** to comment on it. The summary lists your comments and has a box for an overall comment. Comments stay in your browser, per head commit, until you delete them. (Under `dyffle watch` they are kept in the project instead; see below.)
 
-**Download comments** saves a JSON file that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyffle.context` list with each comment's line of code and symbol. Hand it to Claude to put on the PR, or post it yourself:
+A changed file's sidebar has a **Viewed** switch, and the map shows an eye on boxes that still hold changed files you haven't viewed. A file is viewed for the diff you saw: when its diff changes, it shows as **Changed since viewed** and counts as not viewed again.
+
+**Copy comments** copies JSON that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyffle.context` list with each comment's line of code and symbol. Paste it to Claude to put on the PR, or post it yourself:
 
 ```sh
-gh api repos/{owner}/{repo}/pulls/12/reviews --input dyffle-review-1a2b3c4.json
+pbpaste | gh api repos/{owner}/{repo}/pulls/12/reviews --input -
 ```
 
-The file has no `event`, so GitHub creates a pending review that you submit from the PR page.
+It has no `event`, so GitHub creates a pending review that you submit from the PR page.
 
 ### Live, next to Claude Code: `dyffle watch`
 
@@ -150,17 +152,37 @@ Only `message` is required. `change: true` takes a snapshot of the working tree 
 | `.dyffle/posts/0001.json` | A post: `id`, `title`, `message`, `author`, `createdAt`, and with a change `snapshot`, `from`, `stats` and `dyffle` (the file name of its merged index, `0001.dyffle.json`) |
 | `.dyffle/live.json` | The merged index of the whole branch, as it is now |
 | `.dyffle/base-<commit>.json` | The base index at the merge base, built once (from a copy of that commit, not the working tree) |
+| `.dyffle/reviews/<key>.json` | Your review of the live branch (`live`) or of a post (`post-<id>`), see below |
 | `.dyffle/server.json` | The URL and process of the running `watch` |
 
 A change you make between two posts is part of the next post with a change. Stop `watch` with Ctrl+C; posts are kept and the feed picks up where it left off next time. Delete `.dyffle/` to start over.
 
-To have Claude Code post its work, add this to the project's `CLAUDE.md`:
+**Reviewing under `watch`.** Comments, the overall comment and viewed files are kept in `.dyffle/reviews/` instead of the browser: one review for the live branch and one per post with a change. Every open page shares them (your laptop and your phone, or `localhost` and a network address), and changes made on one page show on the others. The feed shows how many comments each change has.
+
+A comment on the live branch stays on its line while the code moves on. When the line no longer holds the code it was made on, the comment leaves the diff and is listed in the review as **outdated**, with the old code.
+
+`dyffle comments` prints every review as Markdown, for Claude to act on: the overall comment, then each comment with its file, line, symbol and code, and outdated ones marked:
+
+~~~md
+## Post #2: Add JWT guard
+
+- **src/users/users.controller.ts:14 in `UsersController.findOne`**
+  ```
+  @Get(':id')
+  ```
+  Shouldn't this one stay public?
+~~~
+
+The files themselves are JSON (`key`, `post`, `title`, `headCommit`, `body`, `comments` with `path`/`line`/`side`/`body`/`code`/`symbol`, and `viewed`: path → hash of the diff that was viewed).
+
+To have Claude Code post its work and read your review, add this to the project's `CLAUDE.md`:
 
 ```md
 ## dyffle
 `dyffle watch` runs next to this project and shows the user a review feed. Post to it with `npx dyffle post`:
 - After each coherent change (a feature step, a fix, a refactor), run `npx dyffle post --change --title "<short title>" -m "<markdown>"`: what you changed and why, and what to look at. Put symbols and files in backticks so they link to the map.
 - For a question, a plan or a status update without a change, leave out `--change`.
+- The user reviews in dyffle. Run `npx dyffle comments` before starting the next step and when the user mentions their review; address each comment, and say in your next post what you changed for which comment.
 - If it says watch is not running, carry on without posting.
 ```
 

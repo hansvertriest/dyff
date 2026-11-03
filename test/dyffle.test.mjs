@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, readPostInput, rebase, reverseApply, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, readPostInput, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -563,6 +563,48 @@ describe('dyffle watch', () => {
       while (!text.includes('event: feed')) text += new TextDecoder().decode((await reader.read()).value);
       assert.match(text, /event: feed\ndata: \{"id":5\}/);
       await reader.cancel();
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
+  it('keeps reviews of the live branch and of posts, and lists them as Markdown', async () => {
+    const { server, url } = await serve(session, { port: 0 });
+    try {
+      assert.deepEqual(await (await fetch(url + 'review.json?key=post-2')).json(), { key: 'post-2', body: '', comments: [], viewed: {} });
+      assert.equal((await fetch(url + 'review.json?key=../x')).status, 404);
+      const events = await fetch(url + 'events');
+      const reader = events.body.getReader();
+      await reader.read();
+      const comment = { id: 'a', path: 'src/auth/auth.service.ts', line: 1, side: 'RIGHT', body: 'Why?', code: 'import x;', symbol: 'src/auth/auth.service.ts#AuthService', created: 1 };
+      const put = await fetch(url + 'review.json?key=post-2&client=me', { method: 'PUT', body: JSON.stringify({ body: 'Looks good', comments: [comment], viewed: { 'src/auth/auth.service.ts': 'h1' } }) });
+      assert.equal(put.status, 204);
+      let text = '';
+      while (!text.includes('event: review')) text += new TextDecoder().decode((await reader.read()).value);
+      assert.match(text, /"key":"post-2","client":"me","comments":1/);
+      await reader.cancel();
+      const stored = JSON.parse(readFileSync(join(dir, '.dyffle/reviews/post-2.json'), 'utf8'));
+      assert.equal(stored.post, 2);
+      assert.equal(stored.title, 'Auth');
+      assert.equal(stored.headCommit, feed().posts[1].snapshot);
+      assert.deepEqual(stored.viewed, { 'src/auth/auth.service.ts': 'h1' });
+      assert.equal(feed().posts[1].comments, 1);
+      // A message-only post has no review, and bad input is refused.
+      assert.equal((await fetch(url + 'review.json?key=post-1', { method: 'PUT', body: JSON.stringify({ body: '', comments: [] }) })).status, 400);
+      assert.equal((await fetch(url + 'review.json?key=live', { method: 'PUT', body: '{"body":1}' })).status, 400);
+      assert.throws(() => readReviewInput({ body: '', comments: [{ id: 'x', path: 'a', line: 1, side: 'UP', body: '' }] }), /side/);
+
+      const main = readFileSync(join(dir, 'src/main.ts'), 'utf8').split('\n');
+      session.saveReview('live', JSON.stringify({ body: '', comments: [
+        { id: 'b', path: 'src/main.ts', line: 1, side: 'RIGHT', body: 'Still here', code: main[0], created: 2 },
+        { id: 'c', path: 'src/main.ts', line: 2, side: 'RIGHT', body: 'Was here', code: 'something else', created: 3 },
+      ], viewed: {} }));
+      const md = reviewsMarkdown(dir);
+      assert.match(md, /## Post #2: Auth\n\nLooks good\n\n- \*\*src\/auth\/auth\.service\.ts:1 in `AuthService`\*\*\n/);
+      assert.match(md, /## Whole branch \(live\)/);
+      assert.match(md, /src\/main\.ts:1\*\*\n/);
+      assert.match(md, /src\/main\.ts:2\*\* \(outdated: the line changed since\)/);
     } finally {
       server.closeAllConnections();
       server.close();

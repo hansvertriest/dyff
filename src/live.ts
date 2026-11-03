@@ -47,6 +47,53 @@ export interface WatchOptions extends ProjectOptions {
   log?: Logger;
 }
 
+/** A review comment on one line of a diff, as the viewer writes it. */
+export interface ReviewComment {
+  id: string;
+  path: string;
+  line: number;
+  /** RIGHT: a new or unchanged line, LEFT: a removed one (GitHub's convention). */
+  side: 'LEFT' | 'RIGHT';
+  body: string;
+  /** The line of code commented on, as it was then. */
+  code?: string;
+  /** The symbol whose diff the comment was made in. */
+  symbol?: string | null;
+  created: number;
+}
+
+/**
+ * The review of one dyffle (the live branch or a post), stored as .dyffle/reviews/<key>.json:
+ * comments, an overall comment and the changed files marked viewed, each with a hash of its
+ * diff so a file that changes again counts as not viewed.
+ */
+export interface Review {
+  key: string;
+  /** The post reviewed, or null for the live branch. */
+  post: number | null;
+  title?: string;
+  headCommit?: string;
+  updatedAt: string;
+  body: string;
+  comments: ReviewComment[];
+  viewed: Record<string, string>;
+}
+
+const REVIEW_KEY = /^(live|post-\d+)$/;
+
+/** Validate a review sent by the viewer. */
+export function readReviewInput(x: unknown): Pick<Review, 'body' | 'comments' | 'viewed'> {
+  const o = (typeof x === 'object' && x !== null ? x : {}) as Record<string, unknown>;
+  if (typeof o.body !== 'string') throw new Error('"body" must be a string');
+  if (!Array.isArray(o.comments)) throw new Error('"comments" must be an array');
+  for (const c of o.comments as Record<string, unknown>[])
+    if (typeof c?.id !== 'string' || typeof c.path !== 'string' || typeof c.line !== 'number' || (c.side !== 'LEFT' && c.side !== 'RIGHT') || typeof c.body !== 'string')
+      throw new Error('each comment needs id, path, line, side (LEFT or RIGHT) and body');
+  const viewed = o.viewed ?? {};
+  if (typeof viewed !== 'object' || Array.isArray(viewed) || Object.values(viewed).some((h) => typeof h !== 'string')) throw new Error('"viewed" must map paths to hashes');
+  return { body: o.body, comments: o.comments as ReviewComment[], viewed: viewed as Record<string, string> };
+}
+
 /** The state a change is measured from: a snapshot commit and the codebase index at that snapshot. */
 interface State {
   snapshot: string;
@@ -96,7 +143,7 @@ export class LiveSession implements LiveSource {
 
   /** Build the base and the branch dyffle, then keep watching until stop(). */
   async start(): Promise<void> {
-    for (const d of ['inbox', 'posts']) mkdirSync(join(this.dir, d), { recursive: true });
+    for (const d of ['inbox', 'posts', 'reviews']) mkdirSync(join(this.dir, d), { recursive: true });
     // Keeps .dyffle out of git status and out of working tree snapshots.
     writeFileSync(join(this.dir, '.gitignore'), '*\n');
     this.loadPosts();
@@ -135,7 +182,38 @@ export class LiveSession implements LiveSource {
 
   feed(): string {
     const at = new Map(this.withDyffle().map((p, i) => [p.id, i + 1]));
-    return JSON.stringify({ live: { generatedAt: this.live?.generatedAt }, posts: this.posts.map((p) => ({ ...p, ...(at.has(p.id) ? { index: at.get(p.id) } : {}) })) });
+    const comments = (key: string) => this.readReview(key)?.comments.length ?? 0;
+    return JSON.stringify({
+      live: { generatedAt: this.live?.generatedAt, comments: comments('live') },
+      posts: this.posts.map((p) => ({ ...p, ...(at.has(p.id) ? { index: at.get(p.id), comments: comments(`post-${p.id}`) } : {}) })),
+    });
+  }
+
+  review(key: string): string | undefined {
+    if (!REVIEW_KEY.test(key)) return undefined;
+    const r = this.readReview(key);
+    return JSON.stringify(r ?? { key, body: '', comments: [], viewed: {} });
+  }
+
+  /** Store the review of the live branch ("live") or of a post ("post-<id>"), and tell the other viewers. */
+  saveReview(key: string, json: string, client?: string): void {
+    if (!REVIEW_KEY.test(key)) throw new Error(`Unknown review "${key}"`);
+    const input = readReviewInput(JSON.parse(json));
+    const post = key === 'live' ? undefined : this.posts.find((p) => `post-${p.id}` === key && p.dyffle);
+    if (key !== 'live' && !post) throw new Error(`No post with a change for "${key}"`);
+    const head = post ? post.snapshot : headCommit(this.root);
+    const review: Review = {
+      key,
+      post: post?.id ?? null,
+      ...(post ? { title: post.title ?? firstLine(post.message) } : {}),
+      ...(head ? { headCommit: head } : {}),
+      updatedAt: new Date().toISOString(),
+      ...input,
+    };
+    const file = join(this.dir, 'reviews', `${key}.json`);
+    writeFileSync(file + '.tmp', JSON.stringify(review, null, 2) + '\n');
+    renameSync(file + '.tmp', file);
+    this.emit('review', { key, client: client ?? null, comments: review.comments.length });
   }
 
   subscribe(send: (event: string, data: unknown) => void): () => void {
@@ -147,6 +225,11 @@ export class LiveSession implements LiveSource {
 
   private emit(event: string, data: unknown = {}): void {
     for (const l of this.listeners) l(event, data);
+  }
+
+  private readReview(key: string): Review | undefined {
+    const file = join(this.dir, 'reviews', `${key}.json`);
+    return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Review) : undefined;
   }
 
   private withDyffle(): Post[] {
@@ -330,4 +413,40 @@ export class LiveSession implements LiveSource {
 function firstLine(md: string): string {
   const line = md.trim().split('\n')[0].replace(/^#+\s*/, '');
   return line.length > 60 ? line.slice(0, 59) + '…' : line;
+}
+
+/**
+ * Every review in <root>/.dyffle/reviews as Markdown, for an agent to act on: the overall comment
+ * and each line comment with its code. A comment on the live branch whose line no longer holds
+ * that code is marked as outdated.
+ */
+export function reviewsMarkdown(root: string): string {
+  const dir = join(resolve(root), '.dyffle', 'reviews');
+  if (!existsSync(dir)) return '';
+  const reviews = readdirSync(dir)
+    .filter((f) => REVIEW_KEY.test(f.replace(/\.json$/, '')) && f.endsWith('.json'))
+    .map((f) => JSON.parse(readFileSync(join(dir, f), 'utf8')) as Review)
+    .filter((r) => r.body.trim() || r.comments.length)
+    .sort((a, b) => (a.post ?? Infinity) - (b.post ?? Infinity));
+  const lineNow = (path: string, line: number): string | undefined => {
+    try {
+      return readFileSync(join(resolve(root), path), 'utf8').split('\n')[line - 1];
+    } catch {
+      return undefined;
+    }
+  };
+  const out: string[] = [];
+  for (const r of reviews) {
+    out.push(`## ${r.post === null ? 'Whole branch (live)' : `Post #${r.post}${r.title ? ': ' + r.title : ''}`}`, '');
+    if (r.body.trim()) out.push(r.body.trim(), '');
+    const sorted = [...r.comments].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line);
+    for (const c of sorted) {
+      const outdated = r.post === null && c.side === 'RIGHT' && c.code !== undefined && lineNow(c.path, c.line) !== c.code.replace(/^ $/, '');
+      const where = `${c.path}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol?.includes('#') ? ` in \`${c.symbol.slice(c.symbol.indexOf('#') + 1)}\`` : ''}`;
+      out.push(`- **${where}**${outdated ? ' (outdated: the line changed since)' : ''}`);
+      if (c.code?.trim()) out.push(`  \`\`\`\n  ${c.code}\n  \`\`\``);
+      out.push(...c.body.split('\n').map((l) => `  ${l}`), '');
+    }
+  }
+  return out.join('\n');
 }

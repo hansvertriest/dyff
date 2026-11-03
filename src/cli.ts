@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFil
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildBaseIndex, buildOverlay } from './indexer.js';
-import { LiveSession, readPostInput, type Post } from './live.js';
+import { LiveSession, readPostInput, reviewsMarkdown, type Post } from './live.js';
 import { merge } from './merge.js';
 import { embedSection, markdownReport } from './report.js';
 import { serve, standaloneHtml } from './serve.js';
@@ -21,6 +21,7 @@ Usage
   dyffle serve   <merged.json>... [--port 4173] [--host 127.0.0.1]
   dyffle watch   --base-ref <ref> [project options] [--port 4173] [--host 127.0.0.1]
   dyffle post    (-m <markdown> | --message-file <file|->) [--title <text>] [--change] [--root <dir>]
+  dyffle comments [--root <dir>]
 
 Commands
   index     Index the whole codebase (run on main): modules, files, classes,
@@ -50,6 +51,9 @@ Commands
             in. --change attaches what changed since the previous post.
             The same as writing {"title", "message", "change"} to
             .dyffle/inbox/<name>.json.
+  comments  The review comments made in dyffle watch, as Markdown: per post
+            and for the live branch, each with its file, line and code.
+            They are stored in .dyffle/reviews/<key>.json.
 
 Post options
   -m, --message <md>      The post, in Markdown
@@ -196,6 +200,9 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'post':
       await post(v, log);
+      break;
+    case 'comments':
+      write(reviewsMarkdown(v.root ?? process.cwd()) || 'No review comments yet.\n');
       break;
     case 'report': {
       const md = markdownReport(readIndex(args[0], 'merged index path'), {
