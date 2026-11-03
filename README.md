@@ -109,7 +109,7 @@ In `dyffle serve` or a `dyffle html` page, hover any diff line and click **+** t
 
 A changed file's sidebar has a **Viewed** switch, and the map shows an eye on boxes that still hold changed files you haven't viewed. A file is viewed for the diff you saw: when its diff changes, it shows as **Changed since viewed** and counts as not viewed again.
 
-**Copy comments** copies JSON that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyffle.context` list with each comment's line of code and symbol. Paste it to Claude to put on the PR, or post it yourself:
+**Copy comments** copies JSON that is the body of GitHub's [create a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) call (`commit_id`, `body`, `comments` with `path`/`line`/`side`), plus a `dyffle.context` list with each comment's line of code and symbol (and, under `watch`, comments outside the diff, which `comments` leaves out). Paste it to Claude to put on the PR, or post it yourself:
 
 ```sh
 pbpaste | gh api repos/{owner}/{repo}/pulls/12/reviews --input -
@@ -159,9 +159,13 @@ A change you make between two posts is part of the next post with a change. Stop
 
 **Reviewing under `watch`.** Comments, the overall comment and viewed files are kept in `.dyffle/reviews/` instead of the browser: one review for the live branch and one per post with a change. Every open page shares them (your laptop and your phone, or `localhost` and a network address), and changes made on one page show on the others. The feed shows how many comments each change has.
 
+**Whole files.** A changed file's sidebar has a **Diff | Whole file** switch. The whole file is the file with its diff laid over it: added lines marked, removed lines where they were. An unchanged file shows whole. A symbol's **Show in file** opens its file at the symbol. The text comes from the git tree the dyffle was built from, so it matches the map even when the working tree has moved on. Only files in that dyffle are served.
+
+Every line of a whole file takes comments. A comment on a line the diff doesn't show is marked **outside the diff**: GitHub won't take it on a PR, so **Copy comments** leaves it out of `comments` and lists it, with `outsideDiff: true`, in `dyffle.context` (which holds every comment).
+
 A comment on the live branch stays on its line while the code moves on. When the line no longer holds the code it was made on, the comment leaves the diff and is listed in the review as **outdated**, with the old code.
 
-`dyffle comments` prints every review as Markdown, for Claude to act on: the overall comment, then each comment with its file, line, symbol and code, and outdated ones marked:
+`dyffle comments` prints every review as Markdown, for Claude to act on: the overall comment, then each comment with its file, line, symbol and code, with outdated ones and ones outside the diff marked:
 
 ~~~md
 ## Post #2: Add JWT guard
@@ -173,7 +177,7 @@ A comment on the live branch stays on its line while the code moves on. When the
   Shouldn't this one stay public?
 ~~~
 
-The files themselves are JSON (`key`, `post`, `title`, `headCommit`, `body`, `comments` with `path`/`line`/`side`/`body`/`code`/`symbol`, and `viewed`: path → hash of the diff that was viewed).
+The files themselves are JSON (`key`, `post`, `title`, `headCommit`, `body`, `comments` with `path`/`line`/`side`/`body`/`code`/`symbol` and `outsideDiff`, and `viewed`: path → hash of the diff that was viewed).
 
 To have Claude Code post its work and read your review, add this to the project's `CLAUDE.md`:
 

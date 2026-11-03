@@ -611,6 +611,29 @@ describe('dyffle watch', () => {
     }
   });
 
+  it('serves files as the dyffle they are in shows them', async () => {
+    const p2 = feed().posts[1];
+    const atPost = git(dir, 'show', `${p2.snapshot}:src/auth/auth.service.ts`);
+    assert.equal(JSON.parse(session.source('post-2', 'src/auth/auth.service.ts')).text, atPost);
+    // The live branch serves its own tree: an edit since the last rebuild doesn't show yet.
+    const file = join(dir, 'src/users/users.service.ts'), text = readFileSync(file, 'utf8');
+    appendFileSync(file, '\n// not yet\n');
+    assert.equal(JSON.parse(session.source('live', 'src/users/users.service.ts')).text, text);
+    writeFileSync(file, text);
+    // Unchanged files too, but nothing outside the dyffle, and no unknown or message-only posts.
+    assert.ok(JSON.parse(session.source('live', 'src/main.ts')).text.includes('bootstrap'));
+    for (const [key, path] of [['live', '../outside.ts'], ['live', '.dyffle/state.json'], ['live', 'tsconfig.json'], ['post-1', 'src/main.ts'], ['post-99', 'src/main.ts'], ['x', 'src/main.ts']])
+      assert.equal(session.source(key, path), undefined, `${key} ${path}`);
+    const { server, url } = await serve(session, { port: 0 });
+    try {
+      assert.equal((await (await fetch(url + 'source.json?key=post-2&path=src/auth/auth.service.ts')).json()).text, atPost);
+      assert.equal((await fetch(url + 'source.json?key=live&path=../x')).status, 404);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
   it('picks up posts and state again after a restart', async () => {
     const again = new LiveSession({ root: dir, baseRef: 'main' });
     await again.start();

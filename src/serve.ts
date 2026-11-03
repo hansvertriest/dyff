@@ -26,6 +26,8 @@ export interface LiveSource {
   index(i: number): string | undefined;
   /** The feed as JSON. */
   feed(): string;
+  /** A file's text as JSON, as the live branch ("live") or a post ("post-<id>") shows it; undefined when it isn't in that dyffle. */
+  source(key: string, path: string): string | undefined;
   /** The review of the live branch ("live") or of a post ("post-<id>") as JSON, or undefined for an unknown key. */
   review(key: string): string | undefined;
   /** Store a review sent by a viewer; `client` identifies the page, so it can skip its own change. */
@@ -71,6 +73,11 @@ export function serve(indexJson: string | LabeledIndex<string>[] | LiveSource, o
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const index = url.pathname === '/index.json' ? indexAt(Number(url.searchParams.get('i') ?? 0)) : undefined;
+    const key = url.searchParams.get('key') ?? '';
+    const found = !live || req.method !== 'GET' ? undefined
+      : url.pathname === '/source.json' ? live.source(key, url.searchParams.get('path') ?? '')
+      : url.pathname === '/review.json' ? live.review(key)
+      : undefined;
     const json = (body: string) => {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
       res.end(body);
@@ -86,15 +93,15 @@ export function serve(indexJson: string | LabeledIndex<string>[] | LiveSource, o
     } else if (live && url.pathname === '/review.json' && req.method === 'PUT') {
       readBody(req)
         .then((body) => {
-          live.saveReview(url.searchParams.get('key') ?? '', body, url.searchParams.get('client') ?? undefined);
+          live.saveReview(key, body, url.searchParams.get('client') ?? undefined);
           res.writeHead(204).end();
         })
         .catch((e: Error) => {
           res.writeHead(400, { 'content-type': 'text/plain' });
           res.end(e.message);
         });
-    } else if (live && url.pathname === '/review.json' && live.review(url.searchParams.get('key') ?? '') !== undefined) {
-      json(live.review(url.searchParams.get('key') ?? '')!);
+    } else if (found !== undefined) {
+      json(found);
     } else if (live && url.pathname === '/feed.json') {
       json(live.feed());
     } else if (live && url.pathname === '/events') {

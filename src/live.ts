@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { Analyzer, type ProjectOptions } from './analyzer.js';
 import { buildBaseIndex, buildOverlay, type Logger } from './indexer.js';
-import { commitTree, diffBetween, extractCommit, git, headCommit, mergeBase, worktreeTree } from './git.js';
+import { commitTree, diffBetween, extractCommit, git, headCommit, mergeBase, showFile, worktreeTree } from './git.js';
 import { merge, rebase } from './merge.js';
 import type { Index } from './schema.js';
 import type { LiveSource } from './serve.js';
@@ -60,6 +60,8 @@ export interface ReviewComment {
   /** The symbol whose diff the comment was made in. */
   symbol?: string | null;
   created: number;
+  /** Made in the whole file on a line the diff doesn't show (GitHub won't take it on the PR). */
+  outsideDiff?: boolean;
 }
 
 /**
@@ -124,7 +126,9 @@ export class LiveSession implements LiveSource {
   readonly dir: string;
   private readonly project: ProjectOptions;
   private base?: { commit: string; index: Index };
-  private live?: { tree: string; json: string; generatedAt: string };
+  private live?: { tree: string; json: string; generatedAt: string; files: Set<string> };
+  /** Files each post's dyffle shows, read once: only those are served as source. */
+  private postFiles = new Map<number, Set<string>>();
   private state?: State;
   private posts: Post[] = [];
   private listeners = new Set<(event: string, data: unknown) => void>();
@@ -187,6 +191,29 @@ export class LiveSession implements LiveSource {
       live: { generatedAt: this.live?.generatedAt, comments: comments('live') },
       posts: this.posts.map((p) => ({ ...p, ...(at.has(p.id) ? { index: at.get(p.id), comments: comments(`post-${p.id}`) } : {}) })),
     });
+  }
+
+  /**
+   * The text of a file as the dyffle of the live branch ("live") or of a post ("post-<id>") shows
+   * it: from the tree that dyffle was built from, so it matches the map even after the working tree
+   * moved on. Only files in that dyffle are served, and not removed ones.
+   */
+  source(key: string, path: string): string | undefined {
+    let object: string | undefined, files: Set<string> | undefined;
+    if (key === 'live') [object, files] = [this.live?.tree, this.live?.files];
+    else {
+      const post = this.posts.find((p) => `post-${p.id}` === key && p.dyffle);
+      if (!post) return undefined;
+      object = post.snapshot;
+      files = this.postFiles.get(post.id);
+      if (!files) {
+        files = sourceFiles(JSON.parse(readFileSync(join(this.dir, 'posts', post.dyffle!), 'utf8')) as Index);
+        this.postFiles.set(post.id, files);
+      }
+    }
+    if (!object || !files?.has(path)) return undefined;
+    const text = showFile(this.root, object, path);
+    return text === undefined ? undefined : JSON.stringify({ key, path, text });
   }
 
   review(key: string): string | undefined {
@@ -321,7 +348,7 @@ export class LiveSession implements LiveSource {
     const built = !merged;
     merged ??= this.branchDyffle(tree, new Analyzer(this.project));
     const json = JSON.stringify(merged);
-    this.live = { tree, json, generatedAt: merged.generatedAt };
+    this.live = { tree, json, generatedAt: merged.generatedAt, files: sourceFiles(merged) };
     writeFileSync(join(this.dir, 'live.json'), json);
     this.log(`Branch dyffle updated: ${merged.checks!.summary.filesChanged} files changed${built ? ` (${Date.now() - started} ms)` : ''}`);
     this.emit('live', { generatedAt: merged.generatedAt });
@@ -410,6 +437,11 @@ export class LiveSession implements LiveSource {
   }
 }
 
+/** Paths of the files in a dyffle that exist on its head side. */
+function sourceFiles(index: Index): Set<string> {
+  return new Set(index.files.filter((f) => f.change?.status !== 'removed').map((f) => f.path));
+}
+
 function firstLine(md: string): string {
   const line = md.trim().split('\n')[0].replace(/^#+\s*/, '');
   return line.length > 60 ? line.slice(0, 59) + '…' : line;
@@ -443,7 +475,7 @@ export function reviewsMarkdown(root: string): string {
     for (const c of sorted) {
       const outdated = r.post === null && c.side === 'RIGHT' && c.code !== undefined && lineNow(c.path, c.line) !== c.code.replace(/^ $/, '');
       const where = `${c.path}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol?.includes('#') ? ` in \`${c.symbol.slice(c.symbol.indexOf('#') + 1)}\`` : ''}`;
-      out.push(`- **${where}**${outdated ? ' (outdated: the line changed since)' : ''}`);
+      out.push(`- **${where}**${outdated ? ' (outdated: the line changed since)' : c.outsideDiff ? ' (outside the diff)' : ''}`);
       if (c.code?.trim()) out.push(`  \`\`\`\n  ${c.code}\n  \`\`\``);
       out.push(...c.body.split('\n').map((l) => `  ${l}`), '');
     }

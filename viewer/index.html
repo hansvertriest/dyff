@@ -277,6 +277,15 @@ details.file>summary.fhead:hover{background:var(--line)}
 .crow .main{flex:1;min-width:0}
 .crow .cbody{font-size:13px;margin:2px 0 0}
 .crow .outdated{color:var(--mod);font-weight:600}
+.crow .outside{color:var(--muted);font-weight:600}
+/* dyffle watch: a whole file with its diff. */
+.hrow{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.seg{display:inline-flex;border:1px solid var(--stroke);border-radius:8px;overflow:hidden;flex:none}
+.seg button{border:0;background:none;padding:3px 10px;font-size:12.5px;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--stroke)}
+.seg button[aria-pressed="true"]{background:var(--accent-soft);color:var(--ink);font-weight:500}
+.dl.focus{box-shadow:inset 3px 0 0 var(--accent)}
+.dl.focus:not(.add):not(.del){background:var(--accent-soft)}
 .crow .ccode{display:block;margin:4px 0 0;padding:2px 6px;border-radius:4px;background:var(--surface-2);font-size:12px;white-space:pre-wrap;word-break:break-all;text-decoration:line-through;color:var(--muted)}
 
 /* dyffle watch: the feed of posts and the live branch. */
@@ -1157,7 +1166,19 @@ function lineText(path, side, line) {
       if (side === 'LEFT' ? l.t === '-' && l.o === line : l.t !== '-' && l.n === line) return l.text || ' ';
 }
 /** A comment whose line now holds other code (the live branch changed under it). */
-const isOutdated = c => c.code !== undefined && lineText(c.path, c.side, c.line) !== c.code;
+function isOutdated(c) {
+  if (c.code === undefined) return false;
+  // A line outside the diff can only be checked against the file when it is loaded.
+  const now = lineText(c.path, c.side, c.line) ?? (c.outsideDiff && c.side === 'RIGHT' ? sourceLine(c.path, c.line) : undefined);
+  return now === undefined ? !c.outsideDiff : now !== c.code;
+}
+/** The innermost symbol of `path` around a line, else the file. */
+function symbolAt(path, line) {
+  let best = null;
+  for (const n of nodesByFile.get(path) || [])
+    if (n.kind !== 'file' && n.range[0] <= line && line <= n.range[1] && (!best || n.range[1] - n.range[0] < best.range[1] - best.range[0])) best = n;
+  return best ? best.id : byId.has(path) ? path : null;
+}
 const commentHtml = c => `<div class="cmt" data-id="${esc(c.id)}"><p class="cbody">${esc(c.body)}</p><div class="cact"><button class="linkbtn" type="button" data-c="edit">Edit</button><button class="linkbtn" type="button" data-c="del">Delete</button></div></div>`;
 // Only comments made on this code: an outdated one is listed in the review, not on whatever the line holds now.
 const threadHtml = (path, side, line, code) => lineComments(path, side, line).filter(c => c.code === undefined || c.code === code).map(commentHtml).join('');
@@ -1186,9 +1207,11 @@ function saveForm(form) {
     review.comments.push({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       path, side, line, body,
-      symbol: t.closest('.diff').dataset.csym || null,
+      symbol: t.closest('.diff').dataset.csym || (side === 'RIGHT' ? symbolAt(path, line) : null),
       code: row.lastElementChild.textContent,
       created: Date.now(),
+      // Made in a whole file on a line the diff doesn't show: GitHub won't take it on the PR.
+      ...(lineText(path, side, line) === undefined ? { outsideDiff: true } : {}),
     });
   }
   saveReview();
@@ -1202,7 +1225,7 @@ function refreshReviewList() {
 }
 function reviewList() {
   const cs = review.comments.slice().sort(byPosition);
-  return `<div id="reviewList">${cs.length ? `<div class="check">${cs.map(c => `<div class="crow"><span class="main"><span class="sub" style="font:12px var(--mono);color:var(--muted)">${esc(c.path)}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol && byId.has(c.symbol) && byId.get(c.symbol).kind !== 'file' ? ' · ' + esc(short(c.symbol)) : ''}${isOutdated(c) ? ' · <b class="outdated">outdated</b>' : ''}</span>${isOutdated(c) && c.code?.trim() ? `<code class="ccode">${esc(c.code)}</code>` : ''}<p class="cbody">${esc(c.body)}</p></span><button class="linkbtn" type="button" data-c="del-list" data-id="${esc(c.id)}">Delete</button></div>`).join('')}</div>` : '<p class="note">Hover a line in any diff below and click <b>+</b> to comment on it.</p>'}</div>`;
+  return `<div id="reviewList">${cs.length ? `<div class="check">${cs.map(c => `<div class="crow"><span class="main"><span class="sub" style="font:12px var(--mono);color:var(--muted)">${esc(c.path)}:${c.line}${c.side === 'LEFT' ? ' (removed line)' : ''}${c.symbol && byId.has(c.symbol) && byId.get(c.symbol).kind !== 'file' ? ' · ' + esc(short(c.symbol)) : ''}${isOutdated(c) ? ' · <b class="outdated">outdated</b>' : c.outsideDiff && lineText(c.path, c.side, c.line) === undefined ? ' · <b class="outside">outside the diff</b>' : ''}</span>${isOutdated(c) && c.code?.trim() ? `<code class="ccode">${esc(c.code)}</code>` : ''}<p class="cbody">${esc(c.body)}</p></span><button class="linkbtn" type="button" data-c="del-list" data-id="${esc(c.id)}">Delete</button></div>`).join('')}</div>` : '<p class="note">Hover a line in any diff below and click <b>+</b> to comment on it.</p>'}</div>`;
 }
 function reviewSection() {
   return `<h3>Your review<span class="count" id="reviewCount">${review.comments.length}</span></h3>
@@ -1215,14 +1238,15 @@ function copyReview() {
   const out = {
     ...(pr.headCommit ? { commit_id: pr.headCommit } : {}),
     ...(review.body.trim() ? { body: review.body.trim() } : {}),
-    comments: cs.map(c => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+    // GitHub refuses a review with a comment on a line outside the PR's diff: those are only in the context.
+    comments: cs.filter(c => lineText(c.path, c.side, c.line) !== undefined).map(c => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
     dyffle: {
       root: D.root,
       ...(pr.baseRef ? { baseRef: pr.baseRef } : {}),
       ...(pr.baseCommit ? { baseCommit: pr.baseCommit } : {}),
       ...(pr.headCommit ? { headCommit: pr.headCommit } : {}),
-      // Same order as `comments`: the commented line and the symbol it is in.
-      context: cs.map(c => ({ path: c.path, line: c.line, side: c.side, code: c.code, ...(c.symbol ? { symbol: c.symbol } : {}), ...(isOutdated(c) ? { outdated: true } : {}) })),
+      // Every comment, in order: the commented line and the symbol it is in, with the ones not in `comments` marked.
+      context: cs.map(c => ({ path: c.path, line: c.line, side: c.side, body: c.body, code: c.code, ...(c.symbol ? { symbol: c.symbol } : {}), ...(isOutdated(c) ? { outdated: true } : {}), ...(lineText(c.path, c.side, c.line) === undefined ? { outsideDiff: true } : {}) })),
     },
   };
   copyText(JSON.stringify(out, null, 2) + '\n').then(ok => {
@@ -1406,13 +1430,13 @@ function renderSymbol(id) {
   out.innerHTML = `
     ${panelTop(file?.change ? viewedSwitch(file.path) : '')}
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
-    <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button></p>
+    <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button>${feed && n.kind !== 'file' && canWhole(fileByPath.get(n.file)) && n.change?.status !== 'removed' ? ` · <button class="linkbtn" data-infile="${esc(n.id)}">Show in file</button>` : ''}</p>
     <div class="chips" style="margin-bottom:10px">${changeOf(n) ? `<span class="badge b-${changeOf(n).status}">${statusWord(changeOf(n).status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
     ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${fc ? `<h3>Circular imports<span class="count ${fcNew ? 'warn' : ''}">${fc.length - 1}</span></h3><p class="note">${fcNew ? 'This PR creates a cycle of imports between this file and these.' : 'This file is part of a cycle of imports that already existed.'}</p><div class="refs">${fc.filter(f => f !== file.path).map(f => symBtn(f)).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
-    ${file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
+    ${file && feed && canWhole(file) ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
     ${tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : ''}
     ${n.injects ? `<h3>Injects</h3><div class="refs">${n.injects.map(i => i.target ? symBtn(i.target, ` · ${esc(i.param)}${i.kind !== 'class' ? ' via ' + esc(i.decorator || 'token') + ' ' + esc(tokenLabel(i.token)) : ''}`) : `<button disabled>${esc(i.param)} <small>${esc(tokenLabel(i.token))}</small></button>`).join('')}</div>` : ''}
@@ -1434,6 +1458,7 @@ function renderView(v, el) {
     else if (v.type === 'module') renderModule(v.id);
     else if (v.type === 'folder') renderFolder(v.id);
     else renderSymbol(v.id);
+    if (feed) fillSources(el);
   } finally { out = $('#pin'); }
 }
 function go(next, push = true) {
@@ -1793,6 +1818,85 @@ function startLive() {
   es.addEventListener('open', () => { if (connected) loadFeed().then(refreshLive).catch(() => {}); connected = true; });
 }
 
+/* ---------- Whole files (dyffle watch) ---------- */
+// The server has the tree each dyffle was built from, so a file can be read whole: unchanged files
+// show as they are, changed ones with their diff laid over them (removed lines where they were).
+// Every line takes comments, also the ones the diff doesn't show.
+let wholeFiles = new Set(), sources = new Map(), sourceLines = new Map(), pendingFocus = null;
+/** Changed or renamed files, and unchanged ones: added and removed files are whole in their diff already. */
+const canWhole = f => !!f && (!f.change || f.change.status === 'modified' || f.change.status === 'renamed');
+const sourceLine = (path, line) => sourceLines.get(`${remoteKey()}|${path}`)?.[line - 1];
+function sourceText(path) {
+  const k = `${remoteKey()}|${path}`;
+  if (!sources.has(k)) {
+    sources.set(k, fetchJson(`source.json?key=${remoteKey()}&path=${encodeURIComponent(path)}`).then(r => {
+      sourceLines.set(k, r.text.replace(/\r\n/g, '\n').split('\n'));
+      return r.text;
+    }, err => { sources.delete(k); throw err; }));
+  }
+  return sources.get(k);
+}
+/** The whole new file with the diff's hunks in place, as one hunk diffBlock can render. */
+function wholeHunk(text, hunks) {
+  const src = text.replace(/\r\n/g, '\n').split('\n');
+  if (src.length > 1 && src[src.length - 1] === '') src.pop();
+  const lines = [];
+  let n = 1, delta = 0;
+  for (const h of hunks || []) {
+    // A hunk with no lines on one side starts after the line it names.
+    const ns = h.newLines ? h.newStart : h.newStart + 1, os = h.oldLines ? h.oldStart : h.oldStart + 1;
+    for (; n < ns; n++) lines.push({ t: ' ', o: n + delta, n, text: src[n - 1] ?? '' });
+    lines.push(...h.lines);
+    n = ns + h.newLines;
+    delta = os + h.oldLines - n;
+  }
+  for (; n <= src.length; n++) lines.push({ t: ' ', o: n + delta, n, text: src[n - 1] });
+  return { header: '', oldStart: 1, oldLines: 0, newStart: 1, newLines: src.length, lines };
+}
+function wholeSection(file) {
+  const whole = !file.change || wholeFiles.has(file.path);
+  const seg = file.change ? `<span class="seg" role="group" aria-label="Show" data-path="${esc(file.path)}"><button type="button" data-mode="diff" aria-pressed="${!whole}">Diff</button><button type="button" data-mode="whole" aria-pressed="${whole}">Whole file</button></span>` : '';
+  return `<div class="hrow"><h3>${file.change ? 'What changed' : 'Source'}</h3>${seg}</div>
+    ${whole ? `<div class="srcwhole" data-src="${esc(file.path)}"><p class="note">Loading ${esc(baseOf(file.path))}…</p></div>` : fileSection(file)}`;
+}
+function fillSources(el) {
+  for (const box of el.querySelectorAll('.srcwhole[data-src]')) {
+    const path = box.dataset.src, key = remoteKey();
+    sourceText(path).then(text => {
+      if (!box.isConnected || key !== remoteKey()) return;
+      const h = wholeHunk(text, fileByPath.get(path)?.change?.hunks);
+      box.innerHTML = diffBlock([h], path);
+      if (pendingFocus?.path === path) {
+        // Mark the symbol's lines, removed lines among them included, and bring them into view.
+        const { from, to } = pendingFocus, rows = box.querySelectorAll('.dl');
+        pendingFocus = null;
+        const at = h.lines.map((l, i) => l.t !== '-' && l.n >= from && l.n <= to ? i : -1).filter(i => i >= 0);
+        if (at.length) {
+          for (let i = at[0]; i <= at[at.length - 1]; i++) rows[i].classList.add('focus');
+          rows[at[0]].scrollIntoView({ block: 'center' });
+        }
+      }
+    }, () => { if (box.isConnected) box.innerHTML = '<p class="note">Could not load this file.</p>'; });
+  }
+}
+document.addEventListener('click', e => {
+  const m = e.target.closest('[data-mode]');
+  if (m) {
+    const panel = m.closest('.panel'), path = m.closest('.seg').dataset.path;
+    if (m.dataset.mode === 'whole') wholeFiles.add(path); else wholeFiles.delete(path);
+    const top = panel.scrollTop;
+    renderView(panel.id === 'panel2' ? side : view, panel.querySelector('.pin'));
+    panel.scrollTop = top;
+    return;
+  }
+  const b = e.target.closest('[data-infile]');
+  if (!b) return;
+  const n = byId.get(b.dataset.infile);
+  wholeFiles.add(n.file);
+  pendingFocus = { path: n.file, from: n.range[0], to: n.range[1] };
+  go({ type: 'symbol', id: n.file });
+});
+
 /* ---------- Load ---------- */
 // Several merged indexes (e.g. one per commit) come as a list of labels; one of them is shown at a time.
 let indexes = null, current = 0;
@@ -1816,6 +1920,9 @@ function useIndex(data, next) {
   document.title = `dyffle · ${baseOf(D.root)}`;
   review = { body: '', comments: [] };
   diffHashes = new Map();
+  // A rebuilt live branch can have other file contents.
+  sources = new Map();
+  sourceLines = new Map();
   loadReview();
   searchIndex = [
     ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
