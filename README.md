@@ -80,7 +80,7 @@ Instead of `--base-ref` you can pass a diff: `--diff pr.diff`, or `--diff -` for
 | `--root <dir>` | Directory node ids are relative to (default: current directory) |
 | `--tsconfig <file>` | Compiler options and path aliases (default: `<root>/tsconfig.json`) |
 | `--include <glob>` | Files to index, repeatable (default: all `.ts` and `.vue` files under root) |
-| `--exclude <glob>` | Extra files to skip, repeatable (`node_modules`, `dist`, `build`, `coverage` and `.d.ts` are always skipped) |
+| `--exclude <glob>` | Extra files to skip, repeatable (`node_modules`, `dist`, `build`, `coverage`, `.dyffle` and `.d.ts` are always skipped) |
 | `--depth <n>` | How many caller steps to follow for routes and tests (default 8) |
 | `-o, --out <file>` | Write to a file instead of stdout |
 | `--pretty` | Indented JSON |
@@ -114,6 +114,55 @@ gh api repos/{owner}/{repo}/pulls/12/reviews --input dyffle-review-1a2b3c4.json
 ```
 
 The file has no `event`, so GitHub creates a pending review that you submit from the PR page.
+
+### Live, next to Claude Code: `dyffle watch`
+
+Run dyffle next to a project while you (or Claude Code) work on it:
+
+```sh
+dyffle watch --base-ref origin/main
+```
+
+It serves the viewer on http://127.0.0.1:4173 with two things in it:
+
+- **The whole branch, live.** A dyffle of the branch against its merge base with `--base-ref`, rebuilt whenever a file changes. Uncommitted and untracked files are included; ignored ones are not. The page updates on its own (unless you are writing a review comment: then it offers the update).
+- **A feed of posts.** A post is a Markdown message, optionally with a dyffle of what changed since the previous post that had one. Opening a post's change shows it on the map; ← → in the picker step through them. In a post, a symbol or file in backticks (`` `UsersService.findOne` ``, `` `src/users/users.service.ts` ``) links to it on the map.
+
+Post from the command line. `dyffle post` waits until the post is in and prints its number:
+
+```sh
+dyffle post --change --title "Add JWT guard" -m "Guards \`UsersController\`. The login route stays public."
+dyffle post -m "Should \`/users/legacy\` keep working? I left it alone for now."
+dyffle post --change --message-file notes.md
+```
+
+Or write a JSON file to `.dyffle/inbox/` (any name ending in `.json`). dyffle takes it in within a second and removes it, or replaces it with `<name>.error` when it is not a valid post:
+
+```json
+{ "title": "Add JWT guard", "message": "Markdown…", "change": true, "author": "claude" }
+```
+
+Only `message` is required. `change: true` takes a snapshot of the working tree and attaches what changed since the previous snapshot. The first one is taken when `watch` starts, so a post never includes what was already on the branch. Snapshots are commits kept under `refs/dyffle/` and are never on a branch, and the real git index is not touched. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
+
+| | |
+| --- | --- |
+| `.dyffle/inbox/` | Posts to take in |
+| `.dyffle/posts/0001.json` | A post: `id`, `title`, `message`, `author`, `createdAt`, and with a change `snapshot`, `from`, `stats` and `dyffle` (the file name of its merged index, `0001.dyffle.json`) |
+| `.dyffle/live.json` | The merged index of the whole branch, as it is now |
+| `.dyffle/base-<commit>.json` | The base index at the merge base, built once (from a copy of that commit, not the working tree) |
+| `.dyffle/server.json` | The URL and process of the running `watch` |
+
+A change you make between two posts is part of the next post with a change. Stop `watch` with Ctrl+C; posts are kept and the feed picks up where it left off next time. Delete `.dyffle/` to start over.
+
+To have Claude Code post its work, add this to the project's `CLAUDE.md`:
+
+```md
+## dyffle
+`dyffle watch` runs next to this project and shows the user a review feed. Post to it with `npx dyffle post`:
+- After each coherent change (a feature step, a fix, a refactor), run `npx dyffle post --change --title "<short title>" -m "<markdown>"`: what you changed and why, and what to look at. Put symbols and files in backticks so they link to the map.
+- For a question, a plan or a status update without a change, leave out `--change`.
+- If it says watch is not running, carry on without posting.
+```
 
 ### In CI: a PR map in every PR description (GitHub Actions)
 
@@ -234,4 +283,4 @@ The base index, the overlay and the merged result share one format (`schemaVersi
 - Static analysis only: providers registered inside dynamic modules (`forRoot` bodies) are not traced into the module graph, and module ids come from the directory layout.
 - Calls through interfaces resolve to the interface, not to the implementations.
 - Without `--base-ref`, the working tree must match the head of the diff.
-- Untracked files are not part of `git diff`. Commit or `git add -N` them before running `overlay` locally.
+- Untracked files are not part of `git diff`. Commit or `git add -N` them before running `overlay` locally (`dyffle watch` includes them).

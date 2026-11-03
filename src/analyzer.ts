@@ -17,7 +17,7 @@ export interface ProjectOptions {
 }
 
 export const DEFAULT_INCLUDE = ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts', '**/*.vue'];
-export const DEFAULT_EXCLUDE = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/*.d.ts'];
+export const DEFAULT_EXCLUDE = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/*.d.ts', '**/.dyffle/**'];
 
 /** True when an identifier only appears in a type (annotation, `implements`, generic argument, ...). */
 function inTypePosition(id: ts.Node): boolean {

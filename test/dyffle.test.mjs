@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reverseApply, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, readPostInput, rebase, reverseApply, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -423,5 +423,157 @@ describe('Vue fixture: single-file components and vue-router routes', () => {
         ['/orders/:id', ['src/composables/useOrders.ts#formatTotal', 'src/components/OrderRow.vue', 'src/views/OrderDetail.vue', 'src/router/index.ts#/orders/:id']],
       ],
     );
+  });
+});
+
+describe('rebase', () => {
+  it('turns a merged index into a base index of the PR head', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    try {
+      cpSync(join(fixture, 'base'), dir, { recursive: true });
+      git(dir, 'init', '-q', '-b', 'main');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-qm', 'base');
+      const base = buildBaseIndex({ root: dir });
+      git(dir, 'checkout', '-qb', 'feature');
+      cpSync(join(fixture, 'pr'), dir, { recursive: true });
+      git(dir, 'rm', '-q', 'src/orders/orders.repository.ts');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-qm', 'pr');
+      const merged = merge(base, buildOverlay({ root: dir, baseRef: 'main' }));
+      const rebased = rebase(merged, 'abc');
+      const fresh = buildBaseIndex({ root: dir });
+      assert.equal(rebased.kind, 'base');
+      assert.equal(rebased.commit, 'abc');
+      assert.equal(rebased.pr, undefined);
+      assert.equal(rebased.checks, undefined);
+      assert.ok(!rebased.nodes.some((n) => n.change) && !rebased.files.some((f) => f.change));
+      assert.deepEqual(rebased.files.map((f) => f.path), fresh.files.map((f) => f.path));
+      assert.deepEqual(rebased.nodes.map((n) => [n.id, n.references]), fresh.nodes.map((n) => [n.id, n.references]));
+      // Usable as the base of the next change.
+      assert.equal(merge(rebased, buildOverlay({ root: dir, diff: '' })).checks.summary.filesChanged, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('dyffle watch', () => {
+  let dir, session;
+  const inbox = (name, body) => writeFileSync(join(dir, '.dyffle/inbox', name), typeof body === 'string' ? body : JSON.stringify(body));
+  const feed = () => JSON.parse(session.feed());
+
+  before(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    cpSync(join(fixture, 'base'), dir, { recursive: true });
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    git(dir, 'checkout', '-qb', 'feature');
+    // Already on the branch before watch starts: part of the branch dyffle, not of any post.
+    appendFileSync(join(dir, 'src/main.ts'), '\nexport const early = 1;\n');
+    writeFileSync(join(dir, 'src/extra.ts'), 'export const extra = 2;\n');
+    session = new LiveSession({ root: dir, baseRef: 'main', interval: 50 });
+    await session.start();
+    await session.stop();
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('starts with a dyffle of the whole branch, untracked files included', async () => {
+    await session.tick();
+    const live = JSON.parse(session.index(0));
+    assert.deepEqual(live.pr.changedFiles.sort(), ['src/extra.ts', 'src/main.ts']);
+    assert.deepEqual(session.labels(), ['Branch (live)']);
+    assert.ok(!git(dir, 'status', '--porcelain').includes('.dyffle'));
+    assert.equal(git(dir, 'diff', '--cached', '--name-only'), '');
+  });
+
+  it('rebuilds the branch dyffle when a file changes', async () => {
+    const before = session.index(0);
+    await session.tick();
+    assert.equal(session.index(0), before);
+    const file = join(dir, 'src/orders/orders.service.ts'), text = readFileSync(file, 'utf8');
+    appendFileSync(file, '\nexport function helper() {}\n');
+    await session.tick();
+    const live = JSON.parse(session.index(0));
+    assert.ok(live.nodes.some((n) => n.id === 'src/orders/orders.service.ts#helper' && n.change?.status === 'added'));
+    writeFileSync(file, text);
+    await session.tick();
+    assert.ok(!JSON.parse(session.index(0)).pr.changedFiles.includes('src/orders/orders.service.ts'));
+  });
+
+  it('posts a message without a change', async () => {
+    inbox('a.json', { message: 'Just a **question**' });
+    await session.tick();
+    const [p] = feed().posts;
+    assert.equal(p.id, 1);
+    assert.equal(p.author, 'claude');
+    assert.equal(p.dyffle, undefined);
+    assert.equal(p.index, undefined);
+    assert.equal(readdirSync(join(dir, '.dyffle/inbox')).length, 0);
+    assert.ok(existsSync(join(dir, '.dyffle/posts/0001.json')));
+  });
+
+  it('attaches what changed since watch started, then since the previous post', async () => {
+    cpSync(join(fixture, 'pr/src/auth'), join(dir, 'src/auth'), { recursive: true });
+    inbox('b.json', { title: 'Auth', message: 'Added auth', change: true });
+    await session.tick();
+    const p2 = feed().posts[1];
+    assert.equal(p2.index, 1);
+    const d2 = JSON.parse(session.index(1));
+    assert.equal(d2.pr.title, 'Auth');
+    assert.equal(d2.pr.headCommit, p2.snapshot);
+    // Not main.ts or extra.ts: those changed before.
+    assert.ok(d2.pr.changedFiles.every((f) => f.startsWith('src/auth/')), d2.pr.changedFiles.join());
+    assert.equal(git(dir, 'rev-parse', 'refs/dyffle/posts/2').trim(), p2.snapshot);
+
+    cpSync(join(fixture, 'pr/src/users/users.service.ts'), join(dir, 'src/users/users.service.ts'));
+    inbox('c.json', { message: 'Users', change: true });
+    await session.tick();
+    const p3 = feed().posts[2];
+    assert.equal(p3.from, p2.snapshot);
+    assert.deepEqual(JSON.parse(session.index(2)).pr.changedFiles, ['src/users/users.service.ts']);
+    assert.deepEqual(session.labels(), ['Branch (live)', '#2 Auth', '#3 Users']);
+    // The branch dyffle follows along.
+    assert.ok(JSON.parse(session.index(0)).pr.changedFiles.includes('src/users/users.service.ts'));
+
+    inbox('d.json', { message: 'Again', change: true });
+    await session.tick();
+    assert.equal(feed().posts[3].note, 'Nothing changed since the previous post.');
+  });
+
+  it('rejects invalid posts with an .error file', async () => {
+    inbox('bad.json', { message: '' });
+    await session.tick();
+    assert.match(readFileSync(join(dir, '.dyffle/inbox/bad.error'), 'utf8'), /message/);
+    assert.throws(() => readPostInput({ message: 'x', change: 'yes' }), /change/);
+  });
+
+  it('serves the feed and streams changes', async () => {
+    const { server, url } = await serve(session, { port: 0 });
+    try {
+      assert.equal((await (await fetch(url + 'feed.json')).json()).posts.length, 4);
+      assert.deepEqual(await (await fetch(url + 'indexes.json')).json(), session.labels());
+      const res = await fetch(url + 'events');
+      const reader = res.body.getReader();
+      await reader.read();
+      inbox('e.json', { message: 'Hello' });
+      await session.tick();
+      let text = '';
+      while (!text.includes('event: feed')) text += new TextDecoder().decode((await reader.read()).value);
+      assert.match(text, /event: feed\ndata: \{"id":5\}/);
+      await reader.cancel();
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
+  it('picks up posts and state again after a restart', async () => {
+    const again = new LiveSession({ root: dir, baseRef: 'main' });
+    await again.start();
+    await again.stop();
+    assert.equal(JSON.parse(again.feed()).posts.length, 5);
+    assert.equal(again.labels().length, 3);
   });
 });

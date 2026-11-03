@@ -176,6 +176,8 @@ export interface FileInfo {
 }
 
 export interface PrInfo {
+  /** What the change is, when it is not a whole branch (e.g. a post in dyffle watch). */
+  title?: string;
   baseRef?: string;
   baseCommit?: string;
   headCommit?: string;

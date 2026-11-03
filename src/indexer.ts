@@ -51,6 +51,12 @@ export interface OverlayOptions extends ProjectOptions {
   baseRef?: string;
   /** Unified diff text. When omitted, it is computed with git from baseRef. */
   diff?: string;
+  /** Commit the diff starts from, when it is not the merge base of baseRef (e.g. an earlier snapshot). */
+  baseCommit?: string;
+  /** Commit the diff ends at, when the working tree is not HEAD (e.g. a snapshot of it). */
+  headCommit?: string;
+  /** A program already loaded for this working tree, to reuse instead of loading it again. */
+  analyzer?: Analyzer;
   log?: Logger;
 }
 
@@ -63,16 +69,16 @@ const isIndexable = (p: string) => (TS_FILE.test(p) || isVueFile(p)) && !p.endsW
  * base-side version to mark nodes added, modified or removed.
  */
 export function buildOverlay(opts: OverlayOptions): Index {
-  const a = new Analyzer(opts);
+  const a = opts.analyzer ?? new Analyzer(opts);
   const index = emptyIndex('overlay', a.root);
-  let baseCommit: string | undefined;
+  let baseCommit = opts.baseCommit;
   let diffText = opts.diff;
-  if (opts.baseRef) baseCommit = mergeBase(a.root, opts.baseRef);
+  if (!baseCommit && opts.baseRef) baseCommit = mergeBase(a.root, opts.baseRef);
   if (diffText === undefined) {
     if (!baseCommit) throw new Error('Pass a diff or a base ref (e.g. --base-ref origin/main).');
     diffText = diffAgainst(a.root, baseCommit);
   }
-  const head = headCommit(a.root);
+  const head = opts.headCommit ?? headCommit(a.root);
   if (head) index.commit = head;
 
   const diffFiles = parseUnifiedDiff(diffText);

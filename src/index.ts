@@ -3,7 +3,8 @@ export { Analyzer, DEFAULT_EXCLUDE, DEFAULT_INCLUDE, type ProjectOptions } from 
 export { parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './diff.js';
 export { finalize, moduleAssigner } from './finalize.js';
 export { buildBaseIndex, buildOverlay, type OverlayOptions } from './indexer.js';
-export { fileEdges, findCycles, merge, moduleEdges, type MergeOptions } from './merge.js';
+export { fileEdges, findCycles, merge, moduleEdges, rebase, type MergeOptions } from './merge.js';
 export { EMBED_END, EMBED_START, embedSection, markdownReport, routeLabel, type ReportOptions } from './report.js';
 export { mermaidModuleMap, type MermaidOptions } from './mermaid.js';
-export { serve, standaloneHtml, type ServeOptions } from './serve.js';
+export { serve, standaloneHtml, type LabeledIndex, type LiveSource, type ServeOptions } from './serve.js';
+export { LiveSession, readPostInput, type Post, type PostInput, type WatchOptions } from './live.js';

@@ -68,6 +68,26 @@ export function merge(base: Index, overlay: Index, opts: MergeOptions = {}): Ind
   return merged;
 }
 
+/**
+ * The codebase as a merged index sees it after the change: a base index of
+ * the PR head, to overlay a later change on. Removed files, modules and
+ * symbols are dropped and every change mark is cleared.
+ */
+export function rebase(merged: Index, commit?: string): Index {
+  if (merged.kind !== 'merged') throw new Error(`Expected a merged index, got "${merged.kind}"`);
+  const { pr: _pr, checks: _checks, ...rest } = clone(merged);
+  const index: Index = {
+    ...rest,
+    kind: 'base',
+    generatedAt: new Date().toISOString(),
+    files: rest.files.filter((f) => f.change?.status !== 'removed').map(({ change: _c, ...f }) => f),
+    nodes: rest.nodes.filter((n) => n.change?.status !== 'removed').map(({ change: _c, ...n }) => n),
+    modules: rest.modules.filter((m) => m.change?.status !== 'removed').map(({ change: _c, ...m }) => m),
+  };
+  if (commit) index.commit = commit;
+  return finalize(index);
+}
+
 /** Module dependency edges: @Module imports and plain file imports that cross modules. */
 export function moduleEdges(index: Index): ModuleEdge[] {
   const removed = new Set(index.modules.filter((m) => m.change?.status === 'removed').map((m) => m.id));
