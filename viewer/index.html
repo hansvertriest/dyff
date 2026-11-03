@@ -1025,6 +1025,8 @@ const kindWord = n => n.kind === 'file' ? 'imports and top-level code' : n.kind;
 const routeText = r => r.type !== 'http' ? `${r.verb} ${r.path}` : `${r.verb} ${D.globalPrefix ? '/' + [D.globalPrefix, r.fullPath].join('/').replace(/\/+/g, '/').replace(/^\/|\/$/g, '') : r.fullPath}`;
 const routeChip = r => `<span class="route">${esc(routeText(r))}</span>`;
 const symLabel = id => { const n = byId.get(id); return n && n.kind === 'file' ? baseOf(id) : short(id); };
+/** How a symbol changed; for a file, the whole file (its own node only covers the imports and top-level code). */
+const changeOf = n => n.kind === 'file' ? fileByPath.get(n.file)?.change : n.change;
 const inPr = id => { const n = byId.get(id); return !!(n && fileByPath.get(n.file)?.change); };
 const symBtn = (id, extra = '') => {
   const n = byId.get(id);
@@ -1383,7 +1385,7 @@ function tree(id, dir, depth, seen) {
   items.forEach(x => seen.add(x));
   return `<ul class="tree${seen.size === items.length + 1 ? ' root' : ''}">${items.slice(0, 30).map(x => {
     const n = byId.get(x);
-    return `<li><button data-sym="${esc(x)}">${esc(symLabel(x))}${n.route ? ' ' + routeChip(n.route) : ''}${n.change ? ` <span class="badge b-${n.change.status}">${statusWord(n.change.status)}</span>` : ''}${n.test ? ' <span class="badge b-test">test</span>' : ''}</button>${tree(x, dir, depth - 1, seen)}</li>`;
+    return `<li><button data-sym="${esc(x)}">${esc(symLabel(x))}${n.route ? ' ' + routeChip(n.route) : ''}${changeOf(n) ? ` <span class="badge b-${changeOf(n).status}">${statusWord(changeOf(n).status)}</span>` : ''}${n.test ? ' <span class="badge b-test">test</span>' : ''}</button>${tree(x, dir, depth - 1, seen)}</li>`;
   }).join('')}${items.length > 30 ? `<li class="note">…and ${items.length - 30} more</li>` : ''}</ul>`;
 }
 function renderSymbol(id) {
@@ -1405,7 +1407,7 @@ function renderSymbol(id) {
     ${panelTop(file?.change ? viewedSwitch(file.path) : '')}
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
     <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button></p>
-    <div class="chips" style="margin-bottom:10px">${ch ? `<span class="badge b-${ch.status}">${statusWord(ch.status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
+    <div class="chips" style="margin-bottom:10px">${changeOf(n) ? `<span class="badge b-${changeOf(n).status}">${statusWord(changeOf(n).status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
     ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${fc ? `<h3>Circular imports<span class="count ${fcNew ? 'warn' : ''}">${fc.length - 1}</span></h3><p class="note">${fcNew ? 'This PR creates a cycle of imports between this file and these.' : 'This file is part of a cycle of imports that already existed.'}</p><div class="refs">${fc.filter(f => f !== file.path).map(f => symBtn(f)).join('')}</div>` : ''}
