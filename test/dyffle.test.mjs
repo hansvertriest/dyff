@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, query, queryMarkdown, reach, reachGraph, readPostInput, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, query, queryMarkdown, reach, reachGraph, readPostInput, readReviewInput, rebase, removeWorktreeRefs, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml, worktreeId } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -1112,6 +1112,8 @@ describe('snapshot refs', () => {
   };
   const stopAll = (sides) => Promise.all(sides.map((s) => s.session.stop()));
   const rev = (root, ref) => git(root, 'rev-parse', ref).trim();
+  const refs = (root, prefix = 'refs/dyffle') => git(root, 'for-each-ref', '--format=%(refname)', prefix).split('\n').filter(Boolean).sort();
+  const exists = (root, commit) => spawnSync('git', ['cat-file', '-e', commit], { cwd: root }).status === 0;
   after(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
   it('keeps each linked worktree in refs of its own', async () => {
@@ -1120,36 +1122,134 @@ describe('snapshot refs', () => {
       const snapshots = sides.flatMap((s) => s.posts.map((p) => p.snapshot));
       assert.equal(new Set(snapshots).size, 4);
       for (const { root, posts } of sides) {
-        assert.equal(rev(root, 'refs/worktree/dyffle/start'), posts[0].from);
-        for (const p of posts) assert.equal(rev(root, `refs/worktree/dyffle/posts/${p.id}`), p.snapshot);
+        const ns = `refs/dyffle/worktrees/${worktreeId(root)}`;
+        assert.equal(rev(root, `${ns}/start`), posts[0].from);
+        for (const p of posts) assert.equal(rev(root, `${ns}/posts/${p.id}`), p.snapshot);
       }
       assert.notEqual(sides[0].posts[0].from, sides[1].posts[0].from);
-      assert.equal(git(main, 'for-each-ref', 'refs/dyffle', 'refs/worktree'), '');
+      assert.notEqual(worktreeId(sides[0].root), worktreeId(sides[1].root));
+      assert.equal(refs(main).length, 6);
+      assert.ok(refs(main).every((r) => r.startsWith('refs/dyffle/worktrees/')));
+      assert.deepEqual(refs(main, 'refs/worktree'), []);
     } finally {
       await stopAll(sides);
     }
   });
 
-  // Fails, and is why this is a todo: git gc honours refs/worktree only of the worktree it runs in
-  // (git 2.50), so from the main worktree it removes the snapshots of every linked one.
-  it('keeps the snapshots of linked worktrees through git gc in the main worktree', { todo: 'git gc does not protect refs/worktree of a sibling worktree' }, async () => {
+  it('keeps the snapshots of linked worktrees through git gc in any worktree', async () => {
     const { main, sides } = await twoWorktrees();
     try {
-      git(main, 'gc', '--prune=now', '--quiet');
-      for (const { root, session, posts } of sides)
-        for (const p of posts) {
-          for (const commit of [p.from, p.snapshot]) assert.equal(git(root, 'cat-file', '-t', commit).trim(), 'commit');
-          assert.match(git(root, 'diff', '--name-only', p.from, p.snapshot), new RegExp(p.file));
-          assert.ok(JSON.parse(session.index(p.id)).files.some((f) => f.path === p.file));
-          assert.match(JSON.parse(session.source(`post-${p.id}`, p.file)).text, /export const v/);
+      for (const from of [main, sides[0].root, sides[1].root]) {
+        git(from, 'gc', '--prune=now', '--quiet');
+        for (const { root, session, posts } of sides) {
+          assert.equal(refs(root).length, 6);
+          for (const p of posts) {
+            for (const commit of [p.from, p.snapshot]) assert.equal(git(root, 'cat-file', '-t', commit).trim(), 'commit');
+            assert.equal(git(root, 'diff', '--name-only', p.from, p.snapshot).trim(), p.file);
+            assert.ok(JSON.parse(session.index(p.id)).files.some((f) => f.path === p.file));
+            assert.match(JSON.parse(session.source(`post-${p.id}`, p.file)).text, /export const v/);
+          }
         }
+        // Without a format too: that one needs the objects, and fails on a dangling ref.
+        for (const root of [main, ...sides.map((s) => s.root)]) assert.equal(git(root, 'for-each-ref', 'refs/dyffle').trim().split('\n').length, 6);
+      }
+      for (const { root, session, posts } of sides) {
+        const file = 'pkg/src/after-gc.ts';
+        writeFileSync(join(root, file), `export const v = '${root}';\n`);
+        const next = await session.post({ message: 'after gc', change: true });
+        assert.equal(next.from, posts[1].snapshot);
+        assert.equal(rev(root, `refs/dyffle/worktrees/${worktreeId(root)}/posts/${next.id}`), next.snapshot);
+        assert.equal(git(root, 'diff', '--name-only', next.from, next.snapshot).trim(), file);
+        assert.equal(JSON.parse(session.source(`post-${next.id}`, file)).text, `export const v = '${root}';\n`);
+      }
     } finally {
       await stopAll(sides);
+    }
+  });
+
+  it('starts clean on the id of a removed worktree, and keeps its refs when it resumes', async () => {
+    const { main, sides } = await twoWorktrees();
+    const [{ root, session, posts: old }, other] = sides;
+    const id = worktreeId(root);
+    const otherRefs = refs(main, `refs/dyffle/worktrees/${worktreeId(other.root)}`);
+    assert.equal(otherRefs.length, 3);
+    try {
+      await session.stop();
+      git(main, 'worktree', 'remove', '--force', root);
+      git(main, 'worktree', 'add', '-q', '--detach', root, 'main');
+      assert.equal(worktreeId(root), id);
+      assert.equal(refs(main, `refs/dyffle/worktrees/${id}`).length, 3);
+
+      writeFileSync(join(root, 'pkg/src/new-start.ts'), "export const start = 'new';\n");
+      const fresh = await start(root);
+      const ns = `refs/dyffle/worktrees/${id}`;
+      assert.deepEqual(refs(main, ns), [`${ns}/start`]);
+      assert.notEqual(rev(root, `${ns}/start`), old[0].from);
+      assert.deepEqual(fresh.labels(), ['Branch (live)']);
+
+      const file = 'pkg/src/new-1.ts';
+      writeFileSync(join(root, file), "export const v = 'new';\n");
+      const post = await fresh.post({ message: 'new', change: true });
+      assert.equal(post.id, 1);
+      assert.equal(post.from, rev(root, `${ns}/start`));
+      assert.deepEqual(refs(main, ns), [`${ns}/posts/1`, `${ns}/start`]);
+      assert.notEqual(post.snapshot, old[0].snapshot);
+      assert.equal(git(root, 'diff', '--name-only', post.from, post.snapshot).trim(), file);
+      await fresh.stop();
+
+      // Stopped and started again, the session still has its state: the refs are its own.
+      const before = refs(main, ns).map((r) => rev(main, r));
+      const resumed = await start(root);
+      assert.deepEqual(refs(main, ns).map((r) => rev(main, r)), before);
+      await resumed.stop();
+      assert.deepEqual(refs(main, `refs/dyffle/worktrees/${worktreeId(other.root)}`), otherRefs);
+    } finally {
+      await other.session.stop();
+    }
+  });
+
+  it('removes the refs of a removed worktree and no others', async () => {
+    const { main, sides } = await twoWorktrees();
+    const [gone, kept] = sides;
+    const session = await start(main);
+    try {
+      writeFileSync(join(main, 'main.ts'), 'export const m = 1;\n');
+      const mainPost = await session.post({ message: 'main', change: true });
+      const id = worktreeId(gone.root);
+      const others = () => refs(main).filter((r) => !r.startsWith(`refs/dyffle/worktrees/${id}/`));
+      const othersBefore = others().map((r) => [r, rev(main, r)]);
+      assert.deepEqual(others().filter((r) => !r.startsWith('refs/dyffle/worktrees/')), ['refs/dyffle/posts/1', 'refs/dyffle/start']);
+      // Git numbers ids that clash, so one id is a prefix of the other: wt and wt1.
+      assert.deepEqual([id, worktreeId(kept.root)], ['wt', 'wt1']);
+      assert.equal(refs(main).length, 8);
+
+      assert.throws(() => removeWorktreeRefs(main, id), /still has this worktree/);
+      assert.equal(refs(main).length, 8);
+
+      await gone.session.stop();
+      git(main, 'worktree', 'remove', '--force', gone.root);
+      assert.equal(removeWorktreeRefs(kept.root, id), 3);
+      assert.deepEqual(refs(main, `refs/dyffle/worktrees/${id}`), []);
+      assert.deepEqual(others().map((r) => [r, rev(main, r)]), othersBefore);
+
+      assert.equal(removeWorktreeRefs(main, id), 0);
+      assert.equal(removeWorktreeRefs(main, 'no-such-worktree'), 0);
+      assert.equal(removeWorktreeRefs(main, '*'), 0);
+      assert.deepEqual(others().map((r) => [r, rev(main, r)]), othersBefore);
+
+      git(main, 'gc', '--prune=now', '--quiet');
+      assert.ok(!exists(main, gone.posts[0].snapshot));
+      assert.ok(exists(main, kept.posts[0].snapshot));
+      assert.ok(exists(main, mainPost.snapshot));
+    } finally {
+      await session.stop();
+      await kept.session.stop();
     }
   });
 
   it('keeps writing refs/dyffle in the main worktree', async () => {
     const main = repo();
+    assert.equal(worktreeId(main), undefined);
     // Reached through a symlink and from a subdirectory, where git gives one absolute and one relative path.
     const link = join(tmp(), 'link');
     symlinkSync(main, link, 'dir');
@@ -1160,7 +1260,7 @@ describe('snapshot refs', () => {
         const post = await session.post({ message: 'b', change: true });
         assert.equal(rev(main, `refs/dyffle/posts/${post.id}`), post.snapshot);
         assert.equal(rev(main, 'refs/dyffle/start'), post.from);
-        assert.equal(git(main, 'for-each-ref', 'refs/worktree'), '');
+        assert.deepEqual(refs(main), ['refs/dyffle/posts/1', 'refs/dyffle/start']);
       } finally {
         await session.stop();
       }

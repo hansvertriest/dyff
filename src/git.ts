@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 const MAX_BUFFER = 512 * 1024 * 1024;
 
@@ -30,14 +30,46 @@ export function mergeBase(cwd: string, ref: string): string {
   return git(cwd, ['merge-base', ref, 'HEAD']).trim();
 }
 
-/**
- * Whether `cwd` is in a linked worktree (`git worktree add`), not in the main one. Symlinks are resolved
- * because git may answer with one absolute path and one relative to the physical `cwd`.
- */
-export function isLinkedWorktree(cwd: string): boolean {
+/** The git directory of this worktree and the one all worktrees share, absolute, with symlinks resolved. */
+function gitDirs(cwd: string): { gitDir: string; commonDir: string } {
+  // git may answer with one absolute path and one relative to the physical cwd.
   const here = realpathSync(cwd);
   const [gitDir, commonDir] = git(cwd, ['rev-parse', '--git-dir', '--git-common-dir']).trim().split('\n').map((p) => realpathSync(resolve(here, p)));
-  return gitDir !== commonDir;
+  return { gitDir, commonDir };
+}
+
+/** git's own id of the linked worktree `cwd` is in (.git/worktrees/<id>), or undefined in the main worktree. */
+export function worktreeId(cwd: string): string | undefined {
+  const { gitDir, commonDir } = gitDirs(cwd);
+  return gitDir === commonDir ? undefined : basename(gitDir);
+}
+
+const WORKTREE_REFS = 'refs/dyffle/worktrees';
+
+/** The namespace of the refs that keep snapshots of the worktree `cwd` is in. */
+export function snapshotRefs(cwd: string): string {
+  const id = worktreeId(cwd);
+  return id ? `${WORKTREE_REFS}/${id}` : 'refs/dyffle';
+}
+
+/** Delete the snapshot refs of a linked worktree id, whatever its state. Returns how many there were. */
+export function deleteWorktreeRefs(cwd: string, id: string): number {
+  const prefix = `${WORKTREE_REFS}/${id}/`;
+  const refs = git(cwd, ['for-each-ref', '--format=%(refname)', WORKTREE_REFS]).split('\n').filter((r) => r.startsWith(prefix));
+  for (const ref of refs) git(cwd, ['update-ref', '-d', ref]);
+  return refs.length;
+}
+
+/**
+ * Delete the snapshot refs a removed worktree left behind, so git can collect its snapshots; they
+ * outlive `git worktree remove`. `root` is any other worktree of the repository and `id` the removed
+ * one's worktreeId(). Other worktrees' refs stay. Returns how many refs it deleted, and throws while
+ * git still has a worktree with that id, whose session may need them (`git worktree prune` forgets
+ * one whose directory is gone).
+ */
+export function removeWorktreeRefs(root: string, id: string): number {
+  if (existsSync(join(gitDirs(root).commonDir, 'worktrees', id))) throw new Error(`Cannot remove the refs of worktree "${id}": git still has this worktree.`);
+  return deleteWorktreeRefs(root, id);
 }
 
 /** Diff of the working tree against a commit, paths relative to `cwd`. */

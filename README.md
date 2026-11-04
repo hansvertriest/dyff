@@ -144,7 +144,7 @@ Or write a JSON file to `.dyffle/inbox/` (any name ending in `.json`). dyffle ta
 { "title": "Add JWT guard", "message": "Markdown…", "change": true, "author": "claude" }
 ```
 
-Only `message` is required. `change: true` takes a snapshot of the working tree and attaches what changed since the previous snapshot. The first one is taken when `watch` starts, so a post never includes what was already on the branch. Snapshots are commits kept under `refs/dyffle/` (in a linked worktree under `refs/worktree/dyffle/`, private to that worktree, so sessions on several worktrees of one repository don't overwrite each other's) and are never on a branch, and the real git index is not touched. `git gc` run from another worktree doesn't see `refs/worktree/`, so it can remove a linked worktree's snapshots once they are old enough to prune. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
+Only `message` is required. `change: true` takes a snapshot of the working tree and attaches what changed since the previous snapshot. The first one is taken when `watch` starts, so a post never includes what was already on the branch. Snapshots are commits kept under `refs/dyffle/` (in a linked worktree under `refs/dyffle/worktrees/<id>/`, with git's id of that worktree, so sessions on several worktrees of one repository don't overwrite each other's) and are never on a branch, and the real git index is not touched. A linked worktree's refs outlive `git worktree remove` until someone deletes them, and keep its snapshots in the repository until then; a new session on a worktree that got the same id replaces them. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
 
 | | |
 | --- | --- |
@@ -348,6 +348,18 @@ const session = new LiveSession({ root: '/path/to/worktree', baseRef: 'origin/ma
 The directory is created when missing and holds `base-<commit>.json` instead of `<root>/.dyffle/`; everything else stays in `.dyffle/`. The output is what a session building its own base would produce. A session whose root is a subfolder of the repository, or that sets `tsconfig`, `include` or `exclude`, gets an index of its own, `base-<commit>-<hash>.json`: the hash covers the subfolder, the tsconfig's path relative to the root, and both glob lists as written, so worktrees with the same options share a file. Sessions and processes can build the same commit at once: files appear whole and the last one wins, so at worst a commit is indexed twice. A file that can't be read, or that another dyffle version wrote, is rebuilt and replaced. Failing to write the file logs a warning and the session carries on.
 
 One thing the cache can't tell apart is `node_modules`: packages resolve from the worktree that builds the index. A worktree without its dependencies installed can build a poorer index, and the others then read it too, so install before starting the first session on a commit. Nothing removes old files from the directory.
+
+A linked worktree's snapshot refs outlive `git worktree remove`. Delete them when you remove one:
+
+```ts
+import { removeWorktreeRefs, worktreeId } from 'dyffle';
+
+const id = worktreeId('/path/to/worktree'); // before removing it; undefined in the main worktree
+// git worktree remove /path/to/worktree
+removeWorktreeRefs('/path/to/repo', id);
+```
+
+`removeWorktreeRefs(root, id)` takes any remaining worktree of the repository, returns how many refs it deleted, and leaves the refs of other worktrees and of the main worktree alone. It throws while git still has a worktree with that id; `git worktree prune` forgets one whose directory is gone.
 
 ## JSON format
 

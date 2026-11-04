@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { Analyzer, type ProjectOptions } from './analyzer.js';
 import { buildBaseIndex, buildOverlay, TOOL_VERSION, type Logger } from './indexer.js';
-import { commitTree, diffBetween, extractCommit, git, headCommit, isLinkedWorktree, mergeBase, showFile, worktreeTree } from './git.js';
+import { commitTree, deleteWorktreeRefs, diffBetween, extractCommit, git, headCommit, mergeBase, showFile, snapshotRefs, worktreeId, worktreeTree } from './git.js';
 import { merge, rebase } from './merge.js';
 import { SCHEMA_VERSION, type Index } from './schema.js';
 import type { LiveSource } from './serve.js';
@@ -26,7 +26,7 @@ export interface Post {
   message: string;
   author: string;
   createdAt: string;
-  /** Snapshot commit of the working tree the attached change ends at (kept under refs/dyffle/posts/<id>, or refs/worktree/dyffle/posts/<id> in a linked worktree). */
+  /** Snapshot commit of the working tree the attached change ends at (kept under refs/dyffle/posts/<id>, or refs/dyffle/worktrees/<worktree id>/posts/<id> in a linked worktree). */
   snapshot?: string;
   /** Snapshot the attached change starts from. */
   from?: string;
@@ -175,6 +175,9 @@ export class LiveSession implements LiveSource {
     this.ensureBase();
     this.rebuildLive(worktreeTree(this.root));
     if (!this.state) {
+      // Git reuses the id of a removed worktree: its refs are a dead session's, as nothing here names them.
+      const id = this.posts.length ? undefined : worktreeId(this.root);
+      if (id) deleteWorktreeRefs(this.root, id);
       // Posts measure change from here, not from the merge base: what was already on the branch isn't part of them.
       const snapshot = commitTree(this.root, this.live!.tree, 'dyffle start', this.snapshotRef('start'));
       this.saveState({ snapshot, index: rebase(JSON.parse(this.live!.json) as Index, snapshot) });
@@ -522,12 +525,12 @@ export class LiveSession implements LiveSource {
   }
 
   /**
-   * The ref that keeps a snapshot. Sessions on linked worktrees of one repository would overwrite each
-   * other's refs under refs/dyffle, which git shares between worktrees, so they use refs/worktree. Note
-   * that `git gc` only honours the refs/worktree of the worktree it runs in.
+   * The ref that keeps a snapshot. Git shares refs between worktrees, so sessions on linked worktrees
+   * each take a namespace of their own. Not refs/worktree: git gc only honours those of the worktree it
+   * runs in, so gc in any other worktree would remove the snapshots.
    */
   private snapshotRef(name: string): string {
-    return `${isLinkedWorktree(this.root) ? 'refs/worktree/dyffle' : 'refs/dyffle'}/${name}`;
+    return `${snapshotRefs(this.root)}/${name}`;
   }
 
   /** Snapshot the working tree and attach a dyffle of what changed since the previous snapshot. */
