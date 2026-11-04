@@ -270,6 +270,20 @@ console.log(markdownReport(merged));
 
 All types of the JSON format are exported (`Index`, `SymbolNode`, `ModuleInfo`, `Checks`, ...).
 
+`query` answers "what is this connected to, and what did the branch do to it?" without reading the whole index. It keeps to ids and short labels, no hunks:
+
+```ts
+import { query } from 'dyffle';
+
+query(merged, 'UsersService.findOne', { depth: 8 }); // { node, change, callers: { touched, untouched }, calls, routes, tests, broken }
+query(merged, 'UsersService');                       // a class adds `members`: the same for each of its members
+query(merged, 'src/users/users.service.ts');         // { file: { path, change, imports }, symbols: [...] }, the file node first
+query(merged, 'findOne');                            // several matches: { candidates: [{ id, kind, file }] }
+query(merged);                                       // { summary: { danglingReferences, signatureChanges, newModuleDependencies, newCycles, newFileCycles, untested } }
+```
+
+The target is a node id, a `Class.method`, `Class` or function name, a bare member name, or a project-relative file path. It throws when nothing matches, and on a summary of an index without `checks`.
+
 ## JSON format
 
 The base index, the overlay and the merged result share one format (`schemaVersion: 1`):
