@@ -144,7 +144,7 @@ Or write a JSON file to `.dyffle/inbox/` (any name ending in `.json`). dyffle ta
 { "title": "Add JWT guard", "message": "Markdown…", "change": true, "author": "claude" }
 ```
 
-Only `message` is required. `change: true` takes a snapshot of the working tree and attaches what changed since the previous snapshot. The first one is taken when `watch` starts, so a post never includes what was already on the branch. Snapshots are commits kept under `refs/dyffle/` and are never on a branch, and the real git index is not touched. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
+Only `message` is required. `change: true` takes a snapshot of the working tree and attaches what changed since the previous snapshot. The first one is taken when `watch` starts, so a post never includes what was already on the branch. Snapshots are commits kept under `refs/dyffle/` (in a linked worktree under `refs/worktree/dyffle/`, private to that worktree, so sessions on several worktrees of one repository don't overwrite each other's) and are never on a branch, and the real git index is not touched. `git gc` run from another worktree doesn't see `refs/worktree/`, so it can remove a linked worktree's snapshots once they are old enough to prune. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
 
 | | |
 | --- | --- |

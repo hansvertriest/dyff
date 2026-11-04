@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const MAX_BUFFER = 512 * 1024 * 1024;
@@ -28,6 +28,16 @@ export function headCommit(cwd: string): string | undefined {
 
 export function mergeBase(cwd: string, ref: string): string {
   return git(cwd, ['merge-base', ref, 'HEAD']).trim();
+}
+
+/**
+ * Whether `cwd` is in a linked worktree (`git worktree add`), not in the main one. Symlinks are resolved
+ * because git may answer with one absolute path and one relative to the physical `cwd`.
+ */
+export function isLinkedWorktree(cwd: string): boolean {
+  const here = realpathSync(cwd);
+  const [gitDir, commonDir] = git(cwd, ['rev-parse', '--git-dir', '--git-common-dir']).trim().split('\n').map((p) => realpathSync(resolve(here, p)));
+  return gitDir !== commonDir;
 }
 
 /** Diff of the working tree against a commit, paths relative to `cwd`. */

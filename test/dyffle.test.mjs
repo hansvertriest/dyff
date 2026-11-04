@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -1062,6 +1062,109 @@ describe('pausing and resuming a session', () => {
       assert.deepEqual(changedFiles(third, 3), ['src/queued.ts']);
     } finally {
       await third.stop();
+    }
+  });
+});
+
+describe('snapshot refs', () => {
+  const dirs = [];
+  const tmp = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-refs-'));
+    dirs.push(dir);
+    return dir;
+  };
+  const repo = () => {
+    const dir = tmp();
+    mkdirSync(join(dir, 'pkg/src'), { recursive: true });
+    writeFileSync(join(dir, 'pkg/src/a.ts'), 'export const a = 1;\n');
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    return dir;
+  };
+  const linked = (main) => {
+    const wt = join(tmp(), 'wt');
+    git(main, 'worktree', 'add', '-q', '--detach', wt, 'main');
+    return wt;
+  };
+  const start = async (root) => {
+    const session = new LiveSession({ root, baseRef: 'main' });
+    await session.start();
+    return session;
+  };
+  /** The same two post ids in each worktree, on sessions that started from different trees. */
+  const twoWorktrees = async () => {
+    const main = repo();
+    const sides = [];
+    for (const name of ['one', 'two']) {
+      const root = linked(main);
+      writeFileSync(join(root, `pkg/src/${name}-start.ts`), `export const start = '${name}';\n`);
+      const session = await start(root);
+      const posts = [];
+      for (const id of [1, 2]) {
+        const file = `pkg/src/${name}-${id}.ts`;
+        writeFileSync(join(root, file), `export const v = '${name}-${id}';\n`);
+        posts.push({ file, ...(await session.post({ message: `${name} ${id}`, change: true })) });
+      }
+      sides.push({ root, session, posts });
+    }
+    return { main, sides };
+  };
+  const stopAll = (sides) => Promise.all(sides.map((s) => s.session.stop()));
+  const rev = (root, ref) => git(root, 'rev-parse', ref).trim();
+  after(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  it('keeps each linked worktree in refs of its own', async () => {
+    const { main, sides } = await twoWorktrees();
+    try {
+      const snapshots = sides.flatMap((s) => s.posts.map((p) => p.snapshot));
+      assert.equal(new Set(snapshots).size, 4);
+      for (const { root, posts } of sides) {
+        assert.equal(rev(root, 'refs/worktree/dyffle/start'), posts[0].from);
+        for (const p of posts) assert.equal(rev(root, `refs/worktree/dyffle/posts/${p.id}`), p.snapshot);
+      }
+      assert.notEqual(sides[0].posts[0].from, sides[1].posts[0].from);
+      assert.equal(git(main, 'for-each-ref', 'refs/dyffle', 'refs/worktree'), '');
+    } finally {
+      await stopAll(sides);
+    }
+  });
+
+  // Fails, and is why this is a todo: git gc honours refs/worktree only of the worktree it runs in
+  // (git 2.50), so from the main worktree it removes the snapshots of every linked one.
+  it('keeps the snapshots of linked worktrees through git gc in the main worktree', { todo: 'git gc does not protect refs/worktree of a sibling worktree' }, async () => {
+    const { main, sides } = await twoWorktrees();
+    try {
+      git(main, 'gc', '--prune=now', '--quiet');
+      for (const { root, session, posts } of sides)
+        for (const p of posts) {
+          for (const commit of [p.from, p.snapshot]) assert.equal(git(root, 'cat-file', '-t', commit).trim(), 'commit');
+          assert.match(git(root, 'diff', '--name-only', p.from, p.snapshot), new RegExp(p.file));
+          assert.ok(JSON.parse(session.index(p.id)).files.some((f) => f.path === p.file));
+          assert.match(JSON.parse(session.source(`post-${p.id}`, p.file)).text, /export const v/);
+        }
+    } finally {
+      await stopAll(sides);
+    }
+  });
+
+  it('keeps writing refs/dyffle in the main worktree', async () => {
+    const main = repo();
+    // Reached through a symlink and from a subdirectory, where git gives one absolute and one relative path.
+    const link = join(tmp(), 'link');
+    symlinkSync(main, link, 'dir');
+    for (const root of [main, join(link, 'pkg')]) {
+      const session = await start(root);
+      try {
+        writeFileSync(join(root, 'b.ts'), `export const b = '${root}';\n`);
+        const post = await session.post({ message: 'b', change: true });
+        assert.equal(rev(main, `refs/dyffle/posts/${post.id}`), post.snapshot);
+        assert.equal(rev(main, 'refs/dyffle/start'), post.from);
+        assert.equal(git(main, 'for-each-ref', 'refs/worktree'), '');
+      } finally {
+        await session.stop();
+      }
+      rmSync(join(root, '.dyffle'), { recursive: true });
     }
   });
 });

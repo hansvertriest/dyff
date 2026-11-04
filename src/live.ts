@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { Analyzer, type ProjectOptions } from './analyzer.js';
 import { buildBaseIndex, buildOverlay, TOOL_VERSION, type Logger } from './indexer.js';
-import { commitTree, diffBetween, extractCommit, git, headCommit, mergeBase, showFile, worktreeTree } from './git.js';
+import { commitTree, diffBetween, extractCommit, git, headCommit, isLinkedWorktree, mergeBase, showFile, worktreeTree } from './git.js';
 import { merge, rebase } from './merge.js';
 import { SCHEMA_VERSION, type Index } from './schema.js';
 import type { LiveSource } from './serve.js';
@@ -26,7 +26,7 @@ export interface Post {
   message: string;
   author: string;
   createdAt: string;
-  /** Snapshot commit of the working tree the attached change ends at (kept under refs/dyffle/posts/<id>). */
+  /** Snapshot commit of the working tree the attached change ends at (kept under refs/dyffle/posts/<id>, or refs/worktree/dyffle/posts/<id> in a linked worktree). */
   snapshot?: string;
   /** Snapshot the attached change starts from. */
   from?: string;
@@ -176,7 +176,7 @@ export class LiveSession implements LiveSource {
     this.rebuildLive(worktreeTree(this.root));
     if (!this.state) {
       // Posts measure change from here, not from the merge base: what was already on the branch isn't part of them.
-      const snapshot = commitTree(this.root, this.live!.tree, 'dyffle start', 'refs/dyffle/start');
+      const snapshot = commitTree(this.root, this.live!.tree, 'dyffle start', this.snapshotRef('start'));
       this.saveState({ snapshot, index: rebase(JSON.parse(this.live!.json) as Index, snapshot) });
     }
     this.loop = this.run();
@@ -521,11 +521,20 @@ export class LiveSession implements LiveSource {
     return post;
   }
 
+  /**
+   * The ref that keeps a snapshot. Sessions on linked worktrees of one repository would overwrite each
+   * other's refs under refs/dyffle, which git shares between worktrees, so they use refs/worktree. Note
+   * that `git gc` only honours the refs/worktree of the worktree it runs in.
+   */
+  private snapshotRef(name: string): string {
+    return `${isLinkedWorktree(this.root) ? 'refs/worktree/dyffle' : 'refs/dyffle'}/${name}`;
+  }
+
   /** Snapshot the working tree and attach a dyffle of what changed since the previous snapshot. */
   private attachChange(post: Post): void {
     this.ensureBase();
     const tree = worktreeTree(this.root);
-    const snapshot = commitTree(this.root, tree, `dyffle post #${post.id}`, `refs/dyffle/posts/${post.id}`);
+    const snapshot = commitTree(this.root, tree, `dyffle post #${post.id}`, this.snapshotRef(`posts/${post.id}`));
     const prev = this.state!;
     post.snapshot = snapshot;
     post.from = prev.snapshot;
