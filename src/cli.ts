@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildBaseIndex, buildOverlay } from './indexer.js';
@@ -181,11 +181,7 @@ async function main(argv: string[]): Promise<void> {
       session.announce(url);
       process.stderr.write(`dyffle watching ${session.root} at ${url}  (Ctrl+C to stop)\n`);
       const quit = () => {
-        try {
-          unlinkSync(join(session.dir, 'server.json'));
-        } catch {
-          /* already gone */
-        }
+        session.unannounce();
         process.exit(0);
       };
       process.on('SIGINT', quit);

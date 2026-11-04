@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { Analyzer, type ProjectOptions } from './analyzer.js';
@@ -112,6 +112,19 @@ export class LiveSession implements LiveSource {
   /** Record where the viewer runs. */
   announce(url: string): void {
     writeFileSync(join(this.dir, 'server.json'), JSON.stringify({ pid: process.pid, url, startedAt: new Date().toISOString() }, null, 2) + '\n');
+  }
+
+  /**
+   * Undo announce(): remove this root's server.json if it holds this process's pid. A file of another
+   * process stays. Never throws, so it is safe on the way out: a missing or malformed file has nothing of ours to remove.
+   */
+  unannounce(): void {
+    const file = join(this.dir, 'server.json');
+    try {
+      if ((JSON.parse(readFileSync(file, 'utf8')) as { pid?: unknown } | null)?.pid === process.pid) unlinkSync(file);
+    } catch {
+      /* missing or malformed */
+    }
   }
 
   /* ---------- LiveSource ---------- */

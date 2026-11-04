@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -983,5 +983,90 @@ describe('dyffle watch', () => {
   it('no longer takes posts', () => {
     const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
     assert.throws(() => execFileSync(process.execPath, [cli, 'post', '-m', 'hi'], { cwd: dir, stdio: 'pipe' }), (e) => /"dyffle post" was removed/.test(e.stderr.toString()));
+  });
+});
+
+describe('unannounce', () => {
+  let roots = [];
+  const root = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    roots.push(dir);
+    mkdirSync(join(dir, '.dyffle'));
+    return dir;
+  };
+  const serverJson = (dir) => join(dir, '.dyffle/server.json');
+  // announce() and unannounce() need no started session or git repo.
+  const session = (dir) => new LiveSession({ root: dir, baseRef: 'main' });
+  after(() => roots.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  it('removes the file announce() wrote, and only in its own root', () => {
+    const [a, b] = [root(), root()];
+    const [sa, sb] = [session(a), session(b)];
+    sa.announce('http://127.0.0.1:1/');
+    sb.announce('http://127.0.0.1:2/');
+    sa.unannounce();
+    assert.ok(!existsSync(serverJson(a)));
+    assert.equal(JSON.parse(readFileSync(serverJson(b), 'utf8')).url, 'http://127.0.0.1:2/');
+  });
+
+  it('leaves the file of another process alone', () => {
+    const dir = root();
+    const other = JSON.stringify({ pid: process.pid + 1, url: 'http://127.0.0.1:1/' });
+    writeFileSync(serverJson(dir), other);
+    session(dir).unannounce();
+    assert.equal(readFileSync(serverJson(dir), 'utf8'), other);
+  });
+
+  it('is no error on a missing or malformed file', () => {
+    const dir = root();
+    session(dir).unannounce();
+    session(join(dir, 'no-such-root')).unannounce();
+    for (const text of ['', '{"pid":', 'null', '12', '[]', `{"pid":"${process.pid}"}`]) {
+      writeFileSync(serverJson(dir), text);
+      session(dir).unannounce();
+      assert.equal(readFileSync(serverJson(dir), 'utf8'), text);
+    }
+  });
+
+  describe('dyffle watch quitting', () => {
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    /** Run watch on a temp repo until server.json is there, run during(), SIGTERM it, return its exit code. */
+    const watchUntilQuit = async (dir, during = () => {}) => {
+      const child = spawn(process.execPath, [cli, 'watch', '--base-ref', 'main', '--root', dir, '--port', '0'], { stdio: 'ignore' });
+      const exit = new Promise((r) => child.once('exit', (code) => r(code)));
+      try {
+        const deadline = Date.now() + 30000;
+        while (!existsSync(serverJson(dir))) {
+          assert.ok(Date.now() < deadline, 'watch did not announce itself');
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        during();
+      } finally {
+        child.kill('SIGTERM');
+      }
+      return exit;
+    };
+    const repo = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+      roots.push(dir);
+      cpSync(join(fixture, 'base'), dir, { recursive: true });
+      git(dir, 'init', '-q', '-b', 'main');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-qm', 'base');
+      return dir;
+    };
+
+    it('removes its own server.json', async () => {
+      const dir = repo();
+      assert.equal(await watchUntilQuit(dir), 0);
+      assert.ok(!existsSync(serverJson(dir)));
+    });
+
+    it('keeps a server.json another process took over', async () => {
+      const dir = repo();
+      const other = JSON.stringify({ pid: process.pid, url: 'http://127.0.0.1:1/' });
+      assert.equal(await watchUntilQuit(dir, () => writeFileSync(serverJson(dir), other)), 0);
+      assert.equal(readFileSync(serverJson(dir), 'utf8'), other);
+    });
   });
 });
