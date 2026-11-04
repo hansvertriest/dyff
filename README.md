@@ -339,6 +339,16 @@ await session.stop();
 
 `post` takes the same input and makes the same post as an inbox file, except that the post has no `source` (the name of the inbox file). Posts take turns with the inbox and with rebuilds of the live branch, so posts made at the same time get sequential ids, and each change measures from the previous one. It rejects on invalid input with the error an inbox file's `<name>.error` would hold, without writing that file, and on a session that isn't started or is stopped. `stop()` waits for posts already accepted. A stopped session stays stopped; a new `LiveSession` on the same root picks up where it left off.
 
+Sessions on worktrees of one repository can share their base indexes, so a commit is indexed once and not once per worktree. Give them the same `baseCacheDir`:
+
+```ts
+const session = new LiveSession({ root: '/path/to/worktree', baseRef: 'origin/main', baseCacheDir: '/path/to/cache' });
+```
+
+The directory is created when missing and holds `base-<commit>.json` instead of `<root>/.dyffle/`; everything else stays in `.dyffle/`. The output is what a session building its own base would produce. A session whose root is a subfolder of the repository, or that sets `tsconfig`, `include` or `exclude`, gets an index of its own, `base-<commit>-<hash>.json`: the hash covers the subfolder, the tsconfig's path relative to the root, and both glob lists as written, so worktrees with the same options share a file. Sessions and processes can build the same commit at once: files appear whole and the last one wins, so at worst a commit is indexed twice. A file that can't be read, or that another dyffle version wrote, is rebuilt and replaced. Failing to write the file logs a warning and the session carries on.
+
+One thing the cache can't tell apart is `node_modules`: packages resolve from the worktree that builds the index. A worktree without its dependencies installed can build a poorer index, and the others then read it too, so install before starting the first session on a commit. Nothing removes old files from the directory.
+
 ## JSON format
 
 The base index, the overlay and the merged result share one format (`schemaVersion: 1`):

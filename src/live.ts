@@ -1,11 +1,12 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { Analyzer, type ProjectOptions } from './analyzer.js';
-import { buildBaseIndex, buildOverlay, type Logger } from './indexer.js';
+import { buildBaseIndex, buildOverlay, TOOL_VERSION, type Logger } from './indexer.js';
 import { commitTree, diffBetween, extractCommit, git, headCommit, mergeBase, showFile, worktreeTree } from './git.js';
 import { merge, rebase } from './merge.js';
-import type { Index } from './schema.js';
+import { SCHEMA_VERSION, type Index } from './schema.js';
 import type { LiveSource } from './serve.js';
 
 /** What Claude (or anyone) writes to .dyffle/inbox/<name>.json to post to the feed. */
@@ -44,6 +45,12 @@ export interface WatchOptions extends ProjectOptions {
   depth?: number;
   /** How often to look for changed files and new posts, in ms. Default 1000. */
   interval?: number;
+  /**
+   * Directory for base indexes, to share them between sessions on worktrees of one repository, instead
+   * of each building its own in <root>/.dyffle. Created when missing. A file holds one commit and one
+   * set of project options (the root's place in the repository, tsconfig, include and exclude).
+   */
+  baseCacheDir?: string;
   log?: Logger;
 }
 
@@ -115,11 +122,22 @@ export function readPostInput(x: unknown): PostInput {
   return { message: o.message, title: o.title as string | undefined, author: o.author as string | undefined, change: o.change as boolean | undefined };
 }
 
+/** A base index from baseCacheDir, or undefined unless it is whole and this dyffle's own for that commit. */
+function readSharedBase(file: string, commit: string): Index | undefined {
+  try {
+    const i = JSON.parse(readFileSync(file, 'utf8')) as Index;
+    const usable = i.kind === 'base' && i.commit === commit && i.schemaVersion === SCHEMA_VERSION && i.tool.version === TOOL_VERSION;
+    return usable && [i.modules, i.files, i.nodes].every(Array.isArray) ? i : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * dyffle running next to a project: keeps a dyffle of the whole branch up to
  * date as files change, and turns files dropped in .dyffle/inbox into posts,
  * each a Markdown message with an optional dyffle of what changed since the
- * previous one. Everything it keeps is in <root>/.dyffle.
+ * previous one. Everything it keeps is in <root>/.dyffle, except base indexes with baseCacheDir.
  */
 export class LiveSession implements LiveSource {
   readonly root: string;
@@ -347,20 +365,72 @@ export class LiveSession implements LiveSource {
   private ensureBase(): boolean {
     const commit = mergeBase(this.root, this.opts.baseRef);
     if (this.base?.commit === commit) return false;
-    const file = join(this.dir, `base-${commit.slice(0, 12)}.json`);
-    let index: Index;
-    if (existsSync(file)) index = JSON.parse(readFileSync(file, 'utf8')) as Index;
-    else {
-      this.log(`Indexing ${this.opts.baseRef} at ${commit.slice(0, 7)}`);
-      index = this.indexCommit(commit);
-      writeFileSync(file, JSON.stringify(index));
-    }
-    this.base = { commit, index };
+    const shared = this.opts.baseCacheDir;
+    this.base = { commit, index: shared ? this.sharedBase(commit, resolve(shared)) : this.ownBase(commit) };
     return true;
+  }
+
+  /** The base index kept in this root's .dyffle. */
+  private ownBase(commit: string): Index {
+    const file = join(this.dir, `base-${commit.slice(0, 12)}.json`);
+    if (existsSync(file)) return JSON.parse(readFileSync(file, 'utf8')) as Index;
+    const index = this.indexCommit(commit);
+    writeFileSync(file, JSON.stringify(index));
+    return index;
+  }
+
+  /**
+   * The base index kept in baseCacheDir, which other sessions and processes read and write too. A
+   * file that can't be used is a miss, and failing to write only costs the next session a build.
+   */
+  private sharedBase(commit: string, dir: string): Index {
+    const file = this.sharedBaseFile(commit, dir);
+    const cached = readSharedBase(file, commit);
+    if (cached) {
+      // All else in an index is relative to the root; this one field names the worktree that built it.
+      cached.root = this.root;
+      return cached;
+    }
+    if (existsSync(file)) this.log(`Replacing the unusable base index ${file}`);
+    const index = this.indexCommit(commit);
+    // Sessions can build one commit at once: each writes its own temp file, and the last rename wins.
+    const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(tmp, JSON.stringify(index));
+      renameSync(tmp, file);
+    } catch (e) {
+      this.log(`warning: could not store the base index in ${dir}: ${(e as Error).message}`);
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        /* dir is no directory, so there is no temp file either */
+      }
+    }
+    return index;
+  }
+
+  /**
+   * base-<commit>.json, with a hash of whatever makes this session's index differ from the default
+   * one at that commit: where the root sits in the repository, and the project options. Worktrees
+   * agree on these however their own paths differ, so the tsconfig counts relative to the root.
+   */
+  private sharedBaseFile(commit: string, dir: string): string {
+    const { tsconfig, include, exclude } = this.opts;
+    const prefix = git(this.root, ['rev-parse', '--show-prefix']).trim();
+    const variant = {
+      ...(prefix ? { prefix } : {}),
+      ...(tsconfig ? { tsconfig: relative(this.root, resolve(tsconfig)) } : {}),
+      ...(include?.length ? { include } : {}),
+      ...(exclude?.length ? { exclude } : {}),
+    };
+    const suffix = Object.keys(variant).length ? `-${createHash('sha256').update(JSON.stringify(variant)).digest('hex').slice(0, 12)}` : '';
+    return join(dir, `base-${commit.slice(0, 12)}${suffix}.json`);
   }
 
   /** A base index of a commit, built from a copy of its files so the working tree is left alone. */
   private indexCommit(commit: string): Index {
+    this.log(`Indexing ${this.opts.baseRef} at ${commit.slice(0, 7)}`);
     const tmp = mkdtempSync(join(tmpdir(), 'dyffle-base-'));
     try {
       const root = extractCommit(this.root, commit, tmp);

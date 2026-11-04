@@ -9,6 +9,8 @@ import { isVueFile, parseSource, vueBlockLines } from './vue.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
 
+export const TOOL_VERSION = pkg.version;
+
 export type Logger = (msg: string) => void;
 
 function emptyIndex(kind: IndexKind, root: string): Index {

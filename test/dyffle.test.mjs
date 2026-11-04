@@ -1066,6 +1066,202 @@ describe('pausing and resuming a session', () => {
   });
 });
 
+describe('shared base index', () => {
+  const dirs = [];
+  const tmp = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-cache-'));
+    dirs.push(dir);
+    return dir;
+  };
+  /** A repository of `from` on main, with `n` linked worktrees of the same commit. */
+  const worktrees = (from, n) => {
+    const repo = tmp();
+    from(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'base');
+    return Array.from({ length: n }, () => {
+      const wt = join(tmp(), 'wt');
+      git(repo, 'worktree', 'add', '-q', '--detach', wt, 'main');
+      return wt;
+    });
+  };
+  const nest = (dir) => cpSync(join(fixture, 'base'), dir, { recursive: true });
+  const small = (dir) => {
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, 'src/a.ts'), 'export const a = 1;\n');
+    writeFileSync(join(dir, 'src/b.ts'), "import { a } from './a';\nexport const b = a;\n");
+  };
+  /** Run a session from start to stop; returns its log and merged branch index. */
+  const run = async (root, opts = {}) => {
+    const log = [];
+    const session = new LiveSession({ root, baseRef: 'main', log: (m) => log.push(m), ...opts });
+    await session.start();
+    const merged = JSON.parse(session.index(0));
+    await session.stop();
+    return { log, merged, indexed: log.some((m) => m.startsWith('Indexing')) };
+  };
+  const stored = (cache) => readdirSync(cache).sort();
+  const onlyFile = (cache) => {
+    const [name] = stored(cache);
+    return join(cache, name);
+  };
+  const withoutTime = ({ generatedAt: _g, ...index }) => index;
+  after(() => dirs.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  it('builds the base once for two worktrees, and the second merges as if it had built it', async () => {
+    const [a, b] = worktrees(nest, 2);
+    const cache = join(tmp(), 'not/yet/there');
+    const first = await run(a, { baseCacheDir: cache });
+    assert.ok(first.indexed);
+    const commit = git(a, 'rev-parse', 'HEAD').trim();
+    assert.deepEqual(stored(cache), [`base-${commit.slice(0, 12)}.json`]);
+    assert.deepEqual(readdirSync(join(a, '.dyffle')).filter((f) => f.startsWith('base-')), []);
+
+    // Nothing of the first worktree may be needed once its index is stored.
+    const text = readFileSync(onlyFile(cache), 'utf8');
+    const { root, ...paths } = JSON.parse(text);
+    assert.equal(root, a);
+    assert.ok(!JSON.stringify(paths).includes(a) && !text.includes('dyffle-base-'), 'an absolute path is left in the index');
+    git(b, 'worktree', 'remove', '--force', a);
+
+    cpSync(join(fixture, 'pr'), b, { recursive: true });
+    writeFileSync(join(b, 'src/users/users.service.ts'), readFileSync(join(b, 'src/users/users.service.ts'), 'utf8').replace('findAllLegacy()', 'findAllLegacy(limit: number)'));
+    const second = await run(b, { baseCacheDir: cache });
+    assert.ok(!second.indexed, second.log.join('\n'));
+    assert.deepEqual(readdirSync(join(b, '.dyffle')).filter((f) => f.startsWith('base-')), []);
+    assert.equal(second.merged.root, b);
+    assert.ok(second.merged.checks.summary.filesChanged > 0);
+
+    // The same worktree and change with a base of its own: this is what the cache must reproduce.
+    const own = await run(b);
+    assert.ok(own.indexed);
+    assert.deepEqual(readdirSync(join(b, '.dyffle')).filter((f) => f.startsWith('base-')), [`base-${commit.slice(0, 12)}.json`]);
+    assert.deepEqual(withoutTime(second.merged), withoutTime(own.merged));
+  });
+
+  it('builds once when sessions in one process start at the same moment', async () => {
+    const [a, b] = worktrees(small, 2);
+    const baseCacheDir = tmp();
+    const results = await Promise.all([run(a, { baseCacheDir }), run(b, { baseCacheDir })]);
+    assert.deepEqual(results.map((r) => r.indexed), [true, false]);
+    assert.equal(stored(baseCacheDir).length, 1);
+  });
+
+  it('survives two processes building the same commit at once', async () => {
+    const [a, b] = worktrees(nest, 2);
+    const baseCacheDir = tmp();
+    const entry = new URL('../dist/index.js', import.meta.url).href;
+    const script = `import { LiveSession } from ${JSON.stringify(entry)};
+      const s = new LiveSession({ root: process.argv[1], baseRef: 'main', baseCacheDir: process.argv[2] });
+      await s.start();
+      await s.stop();`;
+    const codes = await Promise.all(
+      [a, b].map(
+        (root) =>
+          new Promise((done) => {
+            spawn(process.execPath, ['--input-type=module', '-e', script, root, baseCacheDir], { stdio: 'inherit' }).once('exit', done);
+          }),
+      ),
+    );
+    assert.deepEqual(codes, [0, 0]);
+    assert.equal(stored(baseCacheDir).length, 1, stored(baseCacheDir).join());
+    assert.equal(JSON.parse(readFileSync(onlyFile(baseCacheDir), 'utf8')).kind, 'base');
+    assert.ok(!(await run(a, { baseCacheDir })).indexed);
+  });
+
+  it('keeps indexes of different include, exclude and tsconfig options apart', async () => {
+    const [a, b] = worktrees((dir) => {
+      small(dir);
+      writeFileSync(join(dir, 'tsconfig.json'), '{ "compilerOptions": { "strict": true } }\n');
+      writeFileSync(join(dir, 'tsconfig.other.json'), '{ "compilerOptions": { "strict": false } }\n');
+    }, 2);
+    const baseCacheDir = tmp();
+    const paths = (r) => r.merged.files.map((f) => f.path).sort();
+
+    const plain = await run(a, { baseCacheDir });
+    assert.ok(plain.indexed);
+    assert.deepEqual(paths(plain), ['src/a.ts', 'src/b.ts']);
+
+    const included = await run(b, { baseCacheDir, include: ['src/a.ts'] });
+    assert.ok(included.indexed, 'include must not reuse the plain index');
+    assert.deepEqual(paths(included), ['src/a.ts']);
+
+    const excluded = await run(b, { baseCacheDir, exclude: ['src/a.ts'] });
+    assert.ok(excluded.indexed, 'exclude must not reuse the plain index');
+    assert.deepEqual(paths(excluded), ['src/b.ts']);
+
+    assert.ok((await run(b, { baseCacheDir, tsconfig: join(b, 'tsconfig.other.json') })).indexed, 'tsconfig must not reuse the plain index');
+    assert.equal(stored(baseCacheDir).length, 4);
+
+    // The same options on another worktree do share, though the tsconfig's absolute path differs.
+    assert.ok(!(await run(a, { baseCacheDir, include: ['src/a.ts'] })).indexed);
+    assert.ok(!(await run(a, { baseCacheDir, tsconfig: join(a, 'tsconfig.other.json') })).indexed);
+    assert.ok(!(await run(b, { baseCacheDir })).indexed);
+    assert.equal(stored(baseCacheDir).length, 4);
+  });
+
+  it('keeps projects in different folders of one commit apart', async () => {
+    const [a] = worktrees((dir) => {
+      for (const pkg of ['one', 'two']) {
+        mkdirSync(join(dir, pkg, 'src'), { recursive: true });
+        writeFileSync(join(dir, pkg, `src/${pkg}.ts`), `export const ${pkg} = 1;\n`);
+      }
+    }, 1);
+    const baseCacheDir = tmp();
+    const one = await run(join(a, 'one'), { baseCacheDir });
+    const two = await run(join(a, 'two'), { baseCacheDir });
+    assert.ok(one.indexed && two.indexed);
+    assert.deepEqual(one.merged.files.map((f) => f.path), ['src/one.ts']);
+    assert.deepEqual(two.merged.files.map((f) => f.path), ['src/two.ts']);
+  });
+
+  it('rebuilds and replaces a file it cannot use', async () => {
+    const [a] = worktrees(small, 1);
+    const baseCacheDir = tmp();
+    await run(a, { baseCacheDir });
+    const file = onlyFile(baseCacheDir);
+    const good = JSON.parse(readFileSync(file, 'utf8'));
+    const bad = {
+      truncated: JSON.stringify(good).slice(0, 50),
+      empty: '',
+      null: 'null',
+      'no nodes': JSON.stringify({ ...good, nodes: undefined }),
+      'another commit': JSON.stringify({ ...good, commit: '0'.repeat(40) }),
+      'another schema': JSON.stringify({ ...good, schemaVersion: good.schemaVersion + 1 }),
+      'another dyffle': JSON.stringify({ ...good, tool: { ...good.tool, version: '0.0.0-old' } }),
+    };
+    for (const [what, text] of Object.entries(bad)) {
+      writeFileSync(file, text);
+      const r = await run(a, { baseCacheDir });
+      assert.ok(r.indexed, what);
+      assert.deepEqual(r.merged.files.map((f) => f.path).sort(), ['src/a.ts', 'src/b.ts'], what);
+      assert.equal(JSON.parse(readFileSync(file, 'utf8')).commit, good.commit, what);
+      assert.ok(!(await run(a, { baseCacheDir })).indexed, what);
+    }
+    assert.equal(stored(baseCacheDir).length, 1);
+  });
+
+  it('carries on, with a warning, when the file cannot be stored', async () => {
+    const [a] = worktrees(small, 1);
+    const cache = tmp();
+    const notDir = join(cache, 'file');
+    writeFileSync(notDir, '');
+    const r = await run(a, { baseCacheDir: notDir });
+    assert.ok(r.indexed);
+    assert.ok(r.log.some((m) => m.startsWith('warning: could not store the base index')), r.log.join('\n'));
+    assert.equal(r.merged.files.length, 2);
+
+    // A folder where the file belongs: nothing to read, the rename fails, and no temp file stays.
+    const commit = git(a, 'rev-parse', 'HEAD').trim();
+    mkdirSync(join(cache, 'c', `base-${commit.slice(0, 12)}.json`), { recursive: true });
+    const blocked = await run(a, { baseCacheDir: join(cache, 'c') });
+    assert.ok(blocked.indexed);
+    assert.ok(blocked.log.some((m) => m.startsWith('warning: could not store the base index')), blocked.log.join('\n'));
+    assert.equal(stored(join(cache, 'c')).length, 1);
+  });
+});
+
 describe('LiveSession.post', () => {
   const roots = [];
   /** A temp repo on a feature branch. */
