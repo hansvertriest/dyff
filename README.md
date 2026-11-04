@@ -176,6 +176,46 @@ To have Claude Code work with it, add this to the project's `CLAUDE.md`:
 - The user reviews in dyffle. Run `npx dyffle comments` before starting the next step and when the user mentions their review, and address each comment.
 ```
 
+### Asking about one symbol: `dyffle query`
+
+`dyffle query` tells an agent what a symbol or file is connected to and what the branch did to it, without reading the whole index:
+
+```sh
+dyffle query UsersService.findOne            # the impact of one symbol
+dyffle query src/users/users.service.ts      # of a file, symbol by symbol
+dyffle query                                 # a summary of the branch
+dyffle query findOne --index merged.json --json
+```
+
+The target is a node id, a `Class.method`, `Class` or function name, or a file path relative to `--root` (`./src/foo.ts` and an absolute path under `--root` work too). A name that matches several nodes lists them with their ids. With no `--index` it reads `.dyffle/live.json` under `--root`, which `dyffle watch` keeps up to date; without that file either it says so and exits with 1, as it does when nothing matches.
+
+| Option | |
+| --- | --- |
+| `--index <merged.json>` | The index to read (default: `<root>/.dyffle/live.json`) |
+| `--json` | Print the full [`QueryResult`](#api) instead of Markdown |
+| `--depth <n>` | How many caller steps to follow for routes and tests (default 8) |
+
+The Markdown is short, for an agent: what the node is, its change, callers (untouched first), routes as chains, tests and broken references. A class or file lists its members or symbols and only what each one has. A list stops at 25 items and says how many are left; `--json` has them all, and also what the node calls.
+
+~~~md
+## `src/users/users.service.ts#UsersService.findOne`
+
+method, lines 12-18: `async (id: number, withOrders = false)`
+
+**Change:** modified, signature changed (was `async (id: number)`)
+
+**Callers, untouched (1):**
+- `src/reports/reports.service.ts#ReportsService.userSummary`
+
+**Callers, touched too (1):**
+- `src/users/users.controller.ts#UsersController.findOne`
+
+**Routes (1):**
+- **GET /api/reports/users/:id** via `UsersService.findOne` → `ReportsService.userSummary` → `ReportsController.user`
+
+**None:** tests, broken references.
+~~~
+
 ### In CI: a PR map in every PR description (GitHub Actions)
 
 Add dyffle as a dev dependency (`npm install --save-dev dyffle`), then add `.github/workflows/dyffle.yml`. On every push to a PR it indexes the target branch at the merge base, overlays the PR, keeps a dyffle section in the PR description up to date, and attaches the interactive page to the run:
@@ -269,6 +309,8 @@ query(merged);                                       // { summary: { danglingRef
 ```
 
 The target is a node id, a `Class.method`, `Class` or function name, a bare member name, or a project-relative file path. It throws when nothing matches, and on a summary of an index without `checks`.
+
+`queryMarkdown(result)` turns any of these results into the short Markdown of `dyffle query`.
 
 ## JSON format
 
