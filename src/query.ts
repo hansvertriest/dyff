@@ -1,5 +1,5 @@
 import { reach, reachGraph } from './reach.js';
-import { routeLabel } from './report.js';
+import { code, routeLabel } from './report.js';
 import type { ChangeStatus, Checks, DanglingReference, FileImport, Index, NodeKind, SignatureChange, SymbolNode } from './schema.js';
 
 export interface QueryOptions {
@@ -134,4 +134,102 @@ function branchSummary(index: Index): BranchSummary {
     newFileCycles: c.newFileCycles,
     untested: c.untested,
   };
+}
+
+/** Most items per list in `queryMarkdown`. The result itself always has them all. */
+const LIMIT = 25;
+
+const capped = (items: string[]) => (items.length > LIMIT ? [...items.slice(0, LIMIT), `…and ${items.length - LIMIT} more`] : items);
+const section = (title: string, items: string[]) => [`**${title} (${items.length}):**`, ...capped(items).map((x) => '- ' + x)].join('\n');
+const inline = (items: string[]) => capped(items).join(', ');
+const brokenLine = (d: DanglingReference) => `${code(d.from)} still uses ${code(d.to)}${d.maybeRenamedTo ? ` (renamed to ${code(d.maybeRenamedTo)}?)` : ''}`;
+const none = (empty: string[]) => (empty.length ? [`**None:** ${empty.join(', ')}.`] : []);
+
+const whatItIs = ({ node: { kind, range, signature } }: NodeImpact) =>
+  `${kind}, ${range[0] === range[1] ? `line ${range[0]}` : `lines ${range[0]}-${range[1]}`}${signature ? `: ${code(signature)}` : ''}`;
+
+function changeLine(c: NonNullable<NodeImpact['change']>): string {
+  const was = c.signatureChanged ? `, signature changed${c.previousSignature ? ` (was ${code(c.previousSignature)})` : ''}` : '';
+  return `**Change:** ${c.status}${was}`;
+}
+
+/** The lists of one node, callers with untouched first. `empty` names them in a "none" line; an empty name stays out of it. */
+function lists(n: NodeImpact): { title: string; empty: string; items: string[] }[] {
+  const { touched, untouched } = n.callers;
+  return [
+    { title: 'Callers, untouched', empty: touched.length ? 'untouched callers' : 'callers', items: untouched.map(code) },
+    { title: 'Callers, touched too', empty: '', items: touched.map(code) },
+    { title: 'Routes', empty: 'routes', items: n.routes.map((r) => `**${r.route}** via ${r.chain.map((id) => code(qualifiedName(id))).join(' → ')}`) },
+    { title: 'Tests', empty: 'tests', items: n.tests.map(code) },
+    { title: 'Broken references', empty: 'broken references', items: n.broken.map(brokenLine) },
+  ];
+}
+
+const filled = (n: NodeImpact) => lists(n).filter((l) => l.items.length);
+const isQuiet = (n: NodeImpact): boolean => !n.change && !filled(n).length && (n.members ?? []).every(isQuiet);
+
+/** Symbols under a class or file, a few lines each: only what they have, and those with nothing named once, on one line. */
+function nested(list: NodeImpact[], level: number): string[] {
+  const quiet = list.filter(isQuiet);
+  return [
+    ...list.filter((n) => !isQuiet(n)).flatMap((n) => [
+      `${'#'.repeat(level)} ${code(qualifiedName(n.node.id))}`,
+      [whatItIs(n), ...(n.change ? [changeLine(n.change)] : []), ...filled(n).map((l) => `**${l.title} (${l.items.length}):** ${inline(l.items)}`)].map((x) => '- ' + x).join('\n'),
+      ...nested(n.members ?? [], level + 1),
+    ]),
+    ...(quiet.length ? [`**No change or connections:** ${inline(quiet.map((n) => code(qualifiedName(n.node.id))))}`] : []),
+  ];
+}
+
+function nodeMarkdown(n: NodeImpact): string[] {
+  const head = [`## ${code(n.node.id)}`, whatItIs(n), ...(n.change ? [changeLine(n.change)] : []), ...filled(n).map((l) => section(l.title, l.items))];
+  // The class node alone can have no routes while its methods do, so a "none" here would mislead.
+  if (n.members?.length) return [...head, 'Empty sections are left out.', ...nested(n.members, 3)];
+  const empty = lists(n).filter((l) => l.empty && !l.items.length).map((l) => l.empty);
+  return [...head, ...none([...(n.change ? [] : ['change']), ...empty])];
+}
+
+function fileMarkdown({ file, symbols }: FileImpact): string[] {
+  const c = file.change;
+  const own = symbols.find((n) => n.node.kind === 'file');
+  return [
+    `## ${code(file.path)}`,
+    `**Change:** ${c ? `${c.status}${c.oldPath ? ` from ${code(c.oldPath)}` : ''}, +${c.additions} −${c.deletions}` : 'none'}`,
+    ...(file.imports.length ? [`**Imports:** ${inline(file.imports.map((i) => code(i.resolved ?? i.spec)))}`] : []),
+    ...(own ? filled(own).map((l) => section(l.title, l.items)) : []),
+    'Empty sections are left out.',
+    ...nested(symbols.filter((n) => n !== own), 3),
+  ];
+}
+
+function summaryMarkdown(s: BranchSummary): string[] {
+  const lists: [string, string[]][] = [
+    ['Broken references', s.danglingReferences.map(brokenLine)],
+    [
+      'Signature changes with callers outside the branch',
+      s.signatureChanges.map((x) => `${code(x.id)}: ${code(x.before ?? '')} → ${code(x.after ?? '')}. Check ${inline(x.callersOutsidePr.map(code))}`),
+    ],
+    ['New module dependencies', s.newModuleDependencies.map((e) => `${code(e.from)} → ${code(e.to)} (${e.via}${e.forwardRef ? ', forwardRef' : ''})`)],
+    ['New module cycles', s.newCycles.map((cy) => cy.map(code).join(' ⇄ '))],
+    ['New file cycles', s.newFileCycles.map((cy) => cy.map(code).join(' ⇄ '))],
+    ['Changed code no test reaches', s.untested.map(code)],
+  ];
+  return [
+    '## Branch summary',
+    ...lists.filter(([, items]) => items.length).map(([title, items]) => section(title, items)),
+    ...none(lists.filter(([, items]) => !items.length).map(([title]) => title.toLowerCase())),
+  ];
+}
+
+/** A `QueryResult` as short Markdown for an agent. Long lists stop at 25 items and say how many are left. */
+export function queryMarkdown(result: QueryResult): string {
+  const blocks =
+    'candidates' in result
+      ? [section('Several nodes match, query one by id', result.candidates.map((c) => `${code(c.id)} (${c.kind})`))]
+      : 'summary' in result
+        ? summaryMarkdown(result.summary)
+        : 'file' in result
+          ? fileMarkdown(result)
+          : nodeMarkdown(result);
+  return blocks.join('\n\n') + '\n';
 }

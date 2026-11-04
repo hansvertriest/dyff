@@ -349,7 +349,9 @@ export class LiveSession implements LiveSource {
     merged ??= this.branchDyffle(tree, new Analyzer(this.project));
     const json = JSON.stringify(merged);
     this.live = { tree, json, generatedAt: merged.generatedAt, files: sourceFiles(merged) };
-    writeFileSync(join(this.dir, 'live.json'), json);
+    // dyffle query reads this file at any moment, so it must never be half written.
+    writeFileSync(join(this.dir, 'live.json.tmp'), json);
+    renameSync(join(this.dir, 'live.json.tmp'), join(this.dir, 'live.json'));
     this.log(`Branch dyffle updated: ${merged.checks!.summary.filesChanged} files changed${built ? ` (${Date.now() - started} ms)` : ''}`);
     this.emit('live', { generatedAt: merged.generatedAt });
   }

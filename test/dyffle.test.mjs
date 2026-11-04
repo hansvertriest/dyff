@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, query, reach, reachGraph, readPostInput, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, query, queryMarkdown, reach, reachGraph, readPostInput, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -341,6 +341,139 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.throws(() => query(merged, 'NoSuchThing'), /Nothing in the index matches "NoSuchThing"/);
     assert.throws(() => query(merged, ''), /Nothing in the index matches/);
     assert.throws(() => query(base), /needs a merged index, got a "base" index/);
+  });
+
+  describe('dyffle query', () => {
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    const run = (...args) => spawnSync(process.execPath, [cli, 'query', ...args], { cwd: dir, encoding: 'utf8' });
+    const ok = (...args) => {
+      const r = run(...args);
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout;
+    };
+    const fails = (...args) => {
+      const r = run(...args);
+      assert.equal(r.status, 1);
+      assert.equal(r.stdout, '');
+      return r.stderr;
+    };
+    const findOne = 'src/users/users.service.ts#UsersService.findOne';
+    let file;
+
+    before(() => {
+      file = join(dir, 'merged.json');
+      writeFileSync(file, JSON.stringify(merged));
+    });
+
+    it('prints a node as short Markdown: callers untouched first, routes as chains', () => {
+      const md = ok('UsersService.findOne', '--index', file);
+      assert.equal(md, queryMarkdown(query(merged, 'UsersService.findOne')));
+      assert.ok(md.startsWith(`## \`${findOne}\`\n\nmethod, lines `));
+      assert.ok(md.includes('**Change:** modified, signature changed (was `async (id: number)`)'));
+      assert.ok(md.indexOf('**Callers, untouched (2):**') < md.indexOf('**Callers, touched too (2):**'));
+      assert.ok(md.includes('- **GET /api/reports/users/:id** via `UsersService.findOne` → `ReportsService.userSummary` → `ReportsController.user`'));
+      assert.ok(md.includes('**Tests (1):**\n- `src/users/users.service.spec.ts`'));
+      assert.ok(md.includes('**None:** broken references.'));
+      assert.ok(!md.includes('hunks'));
+    });
+
+    it('--json prints the QueryResult, for each shape', () => {
+      const same = (...target) => assert.deepEqual(JSON.parse(ok(...target, '--index', file, '--json')), query(merged, ...target));
+      same('UsersService.findOne');
+      same('UsersService');
+      same('findOne');
+      same('src/users/users.service.ts');
+      same();
+      assert.deepEqual(JSON.parse(ok('UsersService.findOne', '--index', file, '--json', '--depth', '0')).routes, []);
+    });
+
+    it('prints the other shapes as Markdown', () => {
+      const candidates = ok('findOne', '--index', file);
+      assert.ok(candidates.startsWith('**Several nodes match, query one by id (3):**\n- `src/users/users.controller.ts#UsersController.findOne` (method)\n'));
+
+      const summary = ok('--index', file);
+      assert.ok(summary.startsWith('## Branch summary\n'));
+      assert.ok(summary.includes('**Broken references ('));
+      assert.ok(summary.includes(`\`${findOne}\`: \`async (id: number)\` → \`async (id: number, withOrders = false)\`. Check \`src/reports/reports.service.ts#ReportsService.userSummary\``));
+
+      const whole = ok('src/users/users.service.ts', '--index', file);
+      assert.ok(whole.startsWith('## `src/users/users.service.ts`\n\n**Change:** modified, +'));
+      assert.ok(whole.includes('**Imports:** '));
+      assert.ok(whole.includes('### `UsersService.findOne`'));
+    });
+
+    it('keeps a class short: each member only shows what it has', () => {
+      const md = ok('UsersService', '--index', file);
+      assert.ok(md.includes('### `UsersService.findOne`\n\n- method, lines '));
+      assert.ok(md.includes('### `UsersService.findAllLegacy`'));
+      assert.ok(md.includes('- **Broken references (1):** '));
+      // A class's routes are on its methods: no "none" line to say otherwise, and no empty sections.
+      assert.ok(!md.includes('**None:**'));
+      assert.ok(!md.includes('(0)'));
+    });
+
+    it('caps long lists and says how many are left', () => {
+      const r = query(merged, 'UsersService.findOne');
+      const untouched = Array.from({ length: 30 }, (_, i) => `src/a.ts#c${i}`);
+      const md = queryMarkdown({ ...r, callers: { touched: [], untouched } });
+      assert.ok(md.includes('**Callers, untouched (30):**\n- `src/a.ts#c0`'));
+      assert.ok(md.includes('- `src/a.ts#c24`\n- …and 5 more\n'));
+      assert.ok(!md.includes('c25'));
+    });
+
+    it('takes ./ and absolute paths under the root', () => {
+      const path = 'src/users/users.service.ts';
+      const want = ok(path, '--index', file, '--json');
+      assert.equal(ok(`./${path}`, '--index', file, '--json'), want);
+      assert.equal(ok(join(dir, path), '--index', file, '--json'), want);
+      assert.equal(ok(join(dir, path), '--index', file, '--json', '--root', dir), want);
+      assert.equal(ok(`./${findOne}`, '--index', file, '--json'), ok(findOne, '--index', file, '--json'));
+      assert.equal(ok(`${join(dir, findOne)}`, '--index', file, '--json'), ok(findOne, '--index', file, '--json'));
+      assert.match(fails('/somewhere/else.ts', '--index', file), /Nothing in the index matches "\/somewhere\/else\.ts"/);
+    });
+
+    it('reads .dyffle/live.json under --root when there is no --index', () => {
+      const root = mkdtempSync(join(tmpdir(), 'dyffle-query-'));
+      try {
+        assert.match(fails('--root', root), /No index to query: .*\.dyffle\/live\.json does not exist\. Pass --index <merged\.json>, or run "dyffle watch/);
+        mkdirSync(join(root, '.dyffle'));
+        writeFileSync(join(root, '.dyffle', 'live.json'), JSON.stringify(merged));
+        assert.equal(ok('UsersService.findOne', '--root', root), ok('UsersService.findOne', '--index', file));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it('turns what query throws, and bad input, into clear errors', () => {
+      assert.equal(fails('NoSuchThing', '--index', file), 'dyffle: Nothing in the index matches "NoSuchThing"\n');
+      const baseFile = join(dir, 'base.json');
+      writeFileSync(baseFile, JSON.stringify(base));
+      assert.equal(fails('--index', baseFile), 'dyffle: A branch summary needs a merged index, got a "base" index\n');
+      assert.match(fails('x', '--index', join(dir, 'nope.json')), /No index at .*nope\.json/);
+      writeFileSync(join(dir, 'other.json'), '{}');
+      assert.match(fails('x', '--index', join(dir, 'other.json')), /is not a dyffle index/);
+      writeFileSync(join(dir, 'other.json'), '{"nodes":');
+      assert.match(fails('x', '--index', join(dir, 'other.json')), /is not a dyffle index/);
+      assert.match(fails('UsersService', '--index', file, '--depth', 'x'), /--depth takes a whole number/);
+      assert.match(fails('a', 'b', '--index', file), /Pass one target/);
+
+      // A target works on a base index, with a note that it can't know about changes.
+      const onBase = run('UsersService.findOne', '--index', baseFile);
+      assert.equal(onBase.status, 0);
+      assert.match(onBase.stderr, /"base" index/);
+    });
+
+    it('says plainly when a changed file is one the indexer skips', () => {
+      const withSkipped = join(dir, 'skipped.json');
+      const pr = { ...merged.pr, unindexedFiles: [{ path: 'README.md', status: 'modified', additions: 3, deletions: 1, hunks: [] }] };
+      writeFileSync(withSkipped, JSON.stringify({ ...merged, pr }));
+      for (const target of ['README.md', './README.md']) {
+        assert.equal(
+          fails(target, '--index', withSkipped),
+          "dyffle: README.md changed on this branch (modified, +3 −1), but dyffle doesn't index that file, so it has no symbols or callers to show.\n",
+        );
+      }
+    });
   });
 
   it('keeps the base-side imports of changed files', () => {

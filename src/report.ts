@@ -13,7 +13,7 @@ export interface ReportOptions {
 }
 
 const short = (id: string) => (id.includes('#') ? id.slice(id.indexOf('#') + 1) : id);
-const code = (s: string) => '`' + s.replace(/`/g, "'") + '`';
+export const code = (s: string) => '`' + s.replace(/`/g, "'") + '`';
 
 export function routeLabel(route: Route, globalPrefix?: string): string {
   if (route.type !== 'http') return `${route.verb} ${route.path}`;
