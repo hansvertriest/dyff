@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -972,5 +972,181 @@ describe('dyffle watch', () => {
     await again.stop();
     assert.equal(JSON.parse(again.feed()).posts.length, 5);
     assert.equal(again.labels().length, 3);
+  });
+});
+
+describe('pausing and resuming a session', () => {
+  let dir;
+  const start = async (log) => {
+    const session = new LiveSession({ root: dir, baseRef: 'main', interval: 20, log });
+    await session.start();
+    return session;
+  };
+  const posts = (session) => JSON.parse(session.feed()).posts;
+  /** Post through the inbox, as `dyffle post` does, and let the session's own loop take it in. */
+  const post = async (session, name, body) => {
+    const count = posts(session).length;
+    writeFileSync(join(dir, '.dyffle/inbox', `${name}.json`), JSON.stringify(body));
+    const deadline = Date.now() + 30000;
+    while (posts(session).length === count) {
+      assert.ok(Date.now() < deadline, `post ${name} was not taken in`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return posts(session).at(-1);
+  };
+  const add = (file, name) => writeFileSync(join(dir, file), `export const ${name} = 1;\n`);
+  const changedFiles = (session, i) => JSON.parse(session.index(i)).pr.changedFiles;
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    cpSync(join(fixture, 'base'), dir, { recursive: true });
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    git(dir, 'checkout', '-qb', 'feature');
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('keeps the posts and measures the next change from the previous post', async () => {
+    const first = await start();
+    let p1;
+    try {
+      const startSnapshot = git(dir, 'rev-parse', 'refs/dyffle/start').trim();
+      add('src/first.ts', 'first');
+      p1 = await post(first, 'a', { title: 'First', message: 'One', change: true });
+      assert.equal(p1.from, startSnapshot);
+      assert.deepEqual(changedFiles(first, 1), ['src/first.ts']);
+    } finally {
+      await first.stop();
+    }
+    const startRef = git(dir, 'rev-parse', 'refs/dyffle/start').trim();
+    const stored = readFileSync(join(dir, '.dyffle/posts/0001.json'), 'utf8');
+
+    // Made while paused, so a new start snapshot would have a different tree and swallow this edit.
+    add('src/paused.ts', 'paused');
+    const logged = [];
+    const second = await start((m) => logged.push(m));
+    try {
+      assert.equal(git(dir, 'rev-parse', 'refs/dyffle/start').trim(), startRef);
+      assert.equal(JSON.parse(readFileSync(join(dir, '.dyffle/state.json'), 'utf8')).snapshot, p1.snapshot);
+      assert.deepEqual(second.labels(), ['Branch (live)', '#1 First']);
+      assert.equal(posts(second)[0].snapshot, p1.snapshot);
+      assert.deepEqual(changedFiles(second, 1), ['src/first.ts']);
+      assert.ok(!logged.some((m) => m.startsWith('Indexing')), logged.join('\n'));
+      assert.deepEqual(changedFiles(second, 0).sort(), ['src/first.ts', 'src/paused.ts']);
+
+      const p2 = await post(second, 'b', { title: 'Second', message: 'Two', change: true });
+      assert.equal(p2.id, 2);
+      assert.equal(p2.from, p1.snapshot);
+      assert.deepEqual(changedFiles(second, 2), ['src/paused.ts']);
+      assert.equal(readFileSync(join(dir, '.dyffle/posts/0001.json'), 'utf8'), stored);
+    } finally {
+      await second.stop();
+    }
+  });
+
+  it('takes in a post queued while paused', async () => {
+    const from = JSON.parse(readFileSync(join(dir, '.dyffle/state.json'), 'utf8')).snapshot;
+    add('src/queued.ts', 'queued');
+    writeFileSync(join(dir, '.dyffle/inbox/c.json'), JSON.stringify({ message: 'Three', change: true }));
+    const third = await start();
+    try {
+      const deadline = Date.now() + 30000;
+      while (posts(third).length < 3) {
+        assert.ok(Date.now() < deadline, 'queued post was not taken in');
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const p3 = posts(third)[2];
+      assert.equal(p3.id, 3);
+      assert.equal(p3.from, from);
+      assert.deepEqual(changedFiles(third, 3), ['src/queued.ts']);
+    } finally {
+      await third.stop();
+    }
+  });
+});
+
+describe('unannounce', () => {
+  let roots = [];
+  const root = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    roots.push(dir);
+    mkdirSync(join(dir, '.dyffle'));
+    return dir;
+  };
+  const serverJson = (dir) => join(dir, '.dyffle/server.json');
+  // announce() and unannounce() need no started session or git repo.
+  const session = (dir) => new LiveSession({ root: dir, baseRef: 'main' });
+  after(() => roots.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  it('removes the file announce() wrote, and only in its own root', () => {
+    const [a, b] = [root(), root()];
+    const [sa, sb] = [session(a), session(b)];
+    sa.announce('http://127.0.0.1:1/');
+    sb.announce('http://127.0.0.1:2/');
+    sa.unannounce();
+    assert.ok(!existsSync(serverJson(a)));
+    assert.equal(JSON.parse(readFileSync(serverJson(b), 'utf8')).url, 'http://127.0.0.1:2/');
+  });
+
+  it('leaves the file of another process alone', () => {
+    const dir = root();
+    const other = JSON.stringify({ pid: process.pid + 1, url: 'http://127.0.0.1:1/' });
+    writeFileSync(serverJson(dir), other);
+    session(dir).unannounce();
+    assert.equal(readFileSync(serverJson(dir), 'utf8'), other);
+  });
+
+  it('is no error on a missing or malformed file', () => {
+    const dir = root();
+    session(dir).unannounce();
+    session(join(dir, 'no-such-root')).unannounce();
+    for (const text of ['', '{"pid":', 'null', '12', '[]', `{"pid":"${process.pid}"}`]) {
+      writeFileSync(serverJson(dir), text);
+      session(dir).unannounce();
+      assert.equal(readFileSync(serverJson(dir), 'utf8'), text);
+    }
+  });
+
+  describe('dyffle watch quitting', () => {
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    /** Run watch on a temp repo until server.json is there, run during(), SIGTERM it, return its exit code. */
+    const watchUntilQuit = async (dir, during = () => {}) => {
+      const child = spawn(process.execPath, [cli, 'watch', '--base-ref', 'main', '--root', dir, '--port', '0'], { stdio: 'ignore' });
+      const exit = new Promise((r) => child.once('exit', (code) => r(code)));
+      try {
+        const deadline = Date.now() + 30000;
+        while (!existsSync(serverJson(dir))) {
+          assert.ok(Date.now() < deadline, 'watch did not announce itself');
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        during();
+      } finally {
+        child.kill('SIGTERM');
+      }
+      return exit;
+    };
+    const repo = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+      roots.push(dir);
+      cpSync(join(fixture, 'base'), dir, { recursive: true });
+      git(dir, 'init', '-q', '-b', 'main');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-qm', 'base');
+      return dir;
+    };
+
+    it('removes its own server.json', async () => {
+      const dir = repo();
+      assert.equal(await watchUntilQuit(dir), 0);
+      assert.ok(!existsSync(serverJson(dir)));
+    });
+
+    it('keeps a server.json another process took over', async () => {
+      const dir = repo();
+      const other = JSON.stringify({ pid: process.pid, url: 'http://127.0.0.1:1/' });
+      assert.equal(await watchUntilQuit(dir, () => writeFileSync(serverJson(dir), other)), 0);
+      assert.equal(readFileSync(serverJson(dir), 'utf8'), other);
+    });
   });
 });

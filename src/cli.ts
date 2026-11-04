@@ -197,11 +197,7 @@ async function main(argv: string[]): Promise<void> {
       session.announce(url);
       process.stderr.write(`dyffle watching ${session.root} at ${url}  (Ctrl+C to stop)\n`);
       const quit = () => {
-        try {
-          unlinkSync(join(session.dir, 'server.json'));
-        } catch {
-          /* already gone */
-        }
+        session.unannounce();
         process.exit(0);
       };
       process.on('SIGINT', quit);
