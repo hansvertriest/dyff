@@ -34,7 +34,7 @@ export interface Post {
   stats?: { files: number; additions: number; deletions: number; symbols: number };
   /** Why a post that asked for a change has none. */
   note?: string;
-  /** Name of the inbox file the post came from. */
+  /** Name of the inbox file the post came from; LiveSession.post() has none. */
   source?: string;
 }
 
@@ -134,6 +134,8 @@ export class LiveSession implements LiveSource {
   private listeners = new Set<(event: string, data: unknown) => void>();
   private stopped = false;
   private loop?: Promise<void>;
+  /** The end of the line of work serial() keeps. Never rejects. */
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: WatchOptions) {
     this.root = resolve(opts.root ?? process.cwd());
@@ -162,9 +164,28 @@ export class LiveSession implements LiveSource {
     this.loop = this.run();
   }
 
+  /** Stop watching. Resolves once the loop has ended and every post accepted before this call is in. */
   async stop(): Promise<void> {
     this.stopped = true;
     await this.loop;
+    await this.queue;
+  }
+
+  /**
+   * Post to the feed directly, without a file in the inbox. Takes its turn with the inbox and with
+   * rebuilds, so posts made at the same time get sequential ids and each change measures from the
+   * previous one. Resolves with the post once it is stored and the `feed` event is sent.
+   *
+   * Rejects when the session isn't started or is stopped, with the error of readPostInput on invalid
+   * input (no `.error` file: that is how the inbox answers, as it has no caller), and when the post
+   * can't be made, e.g. git fails; then nothing is posted and the next post takes its id.
+   */
+  async post(input: PostInput): Promise<Post> {
+    if (this.stopped) throw new Error('Cannot post: this session is stopped. Start a new LiveSession to post again.');
+    if (!this.loop) throw new Error('Cannot post: this session is not started. Call start() first.');
+    const valid = readPostInput(input);
+    const post = await this.serial(() => this.busy('post', () => this.addPost(valid)));
+    return structuredClone(post);
   }
 
   /** Record where the viewer runs, so `dyffle post` can find out whether watch is running. */
@@ -276,6 +297,20 @@ export class LiveSession implements LiveSource {
     return this.posts.filter((p) => p.dyffle);
   }
 
+  /**
+   * Run work after everything already queued, one at a time. All that touches posts, snapshots or
+   * the branch dyffle goes through here: work awaits (see busy()), and in that gap another post or
+   * rebuild must not take the next id or put back an older tree.
+   */
+  private serial<T>(work: () => Promise<T>): Promise<T> {
+    const done = this.queue.then(work);
+    this.queue = done.then(
+      () => {},
+      () => {},
+    );
+    return done;
+  }
+
   private async run(): Promise<void> {
     while (!this.stopped) {
       try {
@@ -288,19 +323,21 @@ export class LiveSession implements LiveSource {
   }
 
   /** New posts first, then the branch dyffle when the working tree or the merge base changed. */
-  async tick(): Promise<void> {
-    for (const name of this.inbox()) await this.busy(`post ${name}`, () => this.ingest(name));
-    const moved = this.ensureBase();
-    const tree = worktreeTree(this.root);
-    if (moved || tree !== this.live?.tree) await this.busy('branch', () => this.rebuildLive(tree));
+  tick(): Promise<void> {
+    return this.serial(async () => {
+      for (const name of this.inbox()) await this.busy(`post ${name}`, () => this.ingest(name));
+      const moved = this.ensureBase();
+      const tree = worktreeTree(this.root);
+      if (moved || tree !== this.live?.tree) await this.busy('branch', () => this.rebuildLive(tree));
+    });
   }
 
   /** Let viewers know a build is running; the build itself blocks the event loop. */
-  private async busy(what: string, work: () => void): Promise<void> {
+  private async busy<T>(what: string, work: () => T): Promise<T> {
     this.emit('status', { building: what });
     await sleep(30);
     try {
-      work();
+      return work();
     } finally {
       this.emit('status', { building: null });
     }
@@ -389,6 +426,11 @@ export class LiveSession implements LiveSource {
       this.log(`Rejected ${name}: ${(e as Error).message}`);
       return;
     }
+    this.addPost(input, name);
+  }
+
+  /** Make a post, however it came in. One from the inbox (`source`, the file's name) leaves the inbox once stored. */
+  private addPost(input: PostInput, source?: string): Post {
     const id = (this.posts.at(-1)?.id ?? 0) + 1;
     const post: Post = {
       id,
@@ -396,16 +438,17 @@ export class LiveSession implements LiveSource {
       message: input.message,
       author: input.author ?? 'claude',
       createdAt: new Date().toISOString(),
-      source: name,
+      ...(source ? { source } : {}),
     };
     if (input.change) this.attachChange(post);
     const out = join(this.dir, 'posts', `${pad(id)}.json`);
     writeFileSync(out + '.tmp', JSON.stringify(post, null, 2) + '\n');
     renameSync(out + '.tmp', out);
-    unlinkSync(file);
+    if (source) unlinkSync(join(this.dir, 'inbox', source));
     this.posts.push(post);
     this.log(`Post #${id}${post.title ? ': ' + post.title : ''}${post.dyffle ? ` (${post.stats!.files} files)` : ''}`);
     this.emit('feed', { id });
+    return post;
   }
 
   /** Snapshot the working tree and attach a dyffle of what changed since the previous snapshot. */

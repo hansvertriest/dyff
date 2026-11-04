@@ -326,6 +326,19 @@ The target is a node id, a `Class.method`, `Class` or function name, a bare memb
 
 `queryMarkdown(result)` turns any of these results into the short Markdown of `dyffle query`.
 
+`LiveSession` is what `dyffle watch` runs. In the same process, post to its feed directly instead of through `.dyffle/inbox/`:
+
+```ts
+import { LiveSession } from 'dyffle';
+
+const session = new LiveSession({ root: '/path/to/repo', baseRef: 'origin/main' });
+await session.start();
+const post = await session.post({ title: 'Add JWT guard', message: 'Markdown…', change: true });
+await session.stop();
+```
+
+`post` takes the same input and makes the same post as an inbox file, except that the post has no `source` (the name of the inbox file). Posts take turns with the inbox and with rebuilds of the live branch, so posts made at the same time get sequential ids, and each change measures from the previous one. It rejects on invalid input with the error an inbox file's `<name>.error` would hold, without writing that file, and on a session that isn't started or is stopped. `stop()` waits for posts already accepted. A stopped session stays stopped; a new `LiveSession` on the same root picks up where it left off.
+
 ## JSON format
 
 The base index, the overlay and the merged result share one format (`schemaVersion: 1`):

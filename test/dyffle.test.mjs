@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -1062,6 +1062,240 @@ describe('pausing and resuming a session', () => {
       assert.deepEqual(changedFiles(third, 3), ['src/queued.ts']);
     } finally {
       await third.stop();
+    }
+  });
+});
+
+describe('LiveSession.post', () => {
+  const roots = [];
+  /** A temp repo on a feature branch. */
+  const repo = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    roots.push(dir);
+    cpSync(join(fixture, 'base'), dir, { recursive: true });
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    git(dir, 'checkout', '-qb', 'feature');
+    return dir;
+  };
+  const started = async (dir, opts = {}) => {
+    const session = new LiveSession({ root: dir, baseRef: 'main', interval: 20, ...opts });
+    await session.start();
+    return session;
+  };
+  const posts = (session) => JSON.parse(session.feed()).posts;
+  const add = (dir, name) => writeFileSync(join(dir, `src/${name}.ts`), `export const ${name} = 1;\n`);
+  const changedFiles = (session, i) => JSON.parse(session.index(i)).pr.changedFiles;
+  const waitFor = async (what, ok) => {
+    const deadline = Date.now() + 30000;
+    while (!ok()) {
+      assert.ok(Date.now() < deadline, `${what} did not happen`);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
+  after(() => roots.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  it('makes the same post as the inbox', async () => {
+    // Two repos with the same history, so even the ids and file names can match.
+    const made = [];
+    for (const via of ['inbox', 'post']) {
+      const dir = repo();
+      const session = await started(dir);
+      const events = [];
+      session.subscribe((event, data) => event === 'feed' && events.push(data));
+      try {
+        add(dir, 'one');
+        const input = { title: 'One', message: 'A *change*', author: 'me', change: true };
+        let returned;
+        if (via === 'post') returned = await session.post(input);
+        else {
+          writeFileSync(join(dir, '.dyffle/inbox/a.json'), JSON.stringify(input));
+          await waitFor('the inbox post', () => posts(session).length === 1);
+        }
+        const stored = JSON.parse(readFileSync(join(dir, '.dyffle/posts/0001.json'), 'utf8'));
+        if (returned) assert.deepEqual(returned, stored);
+        assert.deepEqual(readdirSync(join(dir, '.dyffle/inbox')), []);
+        assert.equal(git(dir, 'rev-parse', 'refs/dyffle/posts/1').trim(), stored.snapshot);
+        assert.equal(JSON.parse(readFileSync(join(dir, '.dyffle/state.json'), 'utf8')).snapshot, stored.snapshot);
+        assert.equal(stored.from, git(dir, 'rev-parse', 'refs/dyffle/start').trim());
+        assert.deepEqual(changedFiles(session, 1), ['src/one.ts']);
+        assert.deepEqual(session.labels(), ['Branch (live)', '#1 One']);
+        assert.ok(changedFiles(session, 0).includes('src/one.ts'));
+        const text = (f) => readFileSync(join(dir, '.dyffle/posts', f), 'utf8');
+        made.push({
+          files: readdirSync(join(dir, '.dyffle/posts')).sort(),
+          // What differs per run, and the source, which only a post from the inbox has.
+          post: { ...stored, createdAt: '', snapshot: '', from: '', source: '' },
+          dyffle: text('0001.dyffle.json')
+            .replaceAll(dir, '<root>')
+            .replace(/\b[0-9a-f]{40}\b/g, '<sha>')
+            .replace(/"generatedAt":"[^"]*"/g, ''),
+          events,
+          source: stored.source,
+        });
+      } finally {
+        await session.stop();
+      }
+    }
+    const [inbox, direct] = made;
+    assert.equal(inbox.source, 'a.json');
+    assert.equal(direct.source, undefined);
+    assert.deepEqual(direct.files, ['0001.dyffle.json', '0001.json']);
+    assert.deepEqual(direct.events, [{ id: 1 }]);
+    for (const made of [inbox, direct]) delete made.source;
+    assert.deepEqual(direct, inbox);
+  });
+
+  it('makes a message without a change, under the default author', async () => {
+    const session = await started(repo());
+    try {
+      const p = await session.post({ message: 'Just a question' });
+      assert.deepEqual(Object.keys(p).sort(), ['author', 'createdAt', 'id', 'message']);
+      assert.equal(p.author, 'claude');
+      // The caller's copy is not the feed's.
+      p.message = 'changed';
+      assert.equal(posts(session)[0].message, 'Just a question');
+    } finally {
+      await session.stop();
+    }
+  });
+
+  it('gives concurrent posts sequential ids, each change measuring from the previous one', async () => {
+    const dir = repo();
+    const session = await started(dir);
+    try {
+      const start = git(dir, 'rev-parse', 'refs/dyffle/start').trim();
+      // A new file after every post, so that each next one has a change of its own only if they run in order.
+      const order = ['c1', 'c2', 'inboxed', 'c3', 'c4'];
+      const unsubscribe = session.subscribe((event, { id }) => event === 'feed' && add(dir, `after${id}`));
+      add(dir, 'first');
+      writeFileSync(join(dir, '.dyffle/inbox/a.json'), JSON.stringify({ message: 'inboxed', change: true }));
+      const returned = await Promise.all(order.filter((m) => m !== 'inboxed').map((message) => session.post({ message, change: true })));
+      await waitFor('the inbox post', () => posts(session).length === order.length);
+      unsubscribe();
+
+      const all = posts(session);
+      assert.deepEqual(all.map((p) => p.id), [1, 2, 3, 4, 5]);
+      assert.deepEqual(returned.map((p) => p.id), all.filter((p) => !p.source).map((p) => p.id));
+      assert.equal(new Set(all.map((p) => p.snapshot)).size, all.length);
+      all.forEach((p, i) => {
+        assert.equal(p.from, i ? all[i - 1].snapshot : start, `#${p.id} measures from the previous post`);
+        assert.equal(git(dir, 'rev-parse', `refs/dyffle/posts/${p.id}`).trim(), p.snapshot);
+        // The first has the file from before; each next one just the file written after the previous post.
+        assert.deepEqual(changedFiles(session, i + 1), i ? [`src/after${i}.ts`] : ['src/first.ts']);
+      });
+      assert.deepEqual(readdirSync(join(dir, '.dyffle/posts')).filter((f) => /^\d+\.json$/.test(f)), ['0001.json', '0002.json', '0003.json', '0004.json', '0005.json']);
+    } finally {
+      await session.stop();
+    }
+  });
+
+  it('does not let overlapping ticks take an inbox file twice', async () => {
+    const dir = repo();
+    const session = await started(dir);
+    try {
+      writeFileSync(join(dir, '.dyffle/inbox/a.json'), JSON.stringify({ message: 'Once' }));
+      await Promise.all([session.tick(), session.tick(), session.post({ message: 'Other' })]);
+      assert.deepEqual(posts(session).map((p) => p.message).sort(), ['Once', 'Other']);
+    } finally {
+      await session.stop();
+    }
+  });
+
+  it('does not let a rebuild put back a tree older than a post', async () => {
+    const dir = repo();
+    const session = await started(dir);
+    try {
+      add(dir, 'early');
+      const posted = session.post({ message: 'Now', change: true });
+      // Looks at the working tree when its turn comes: it must not hold on to a tree from before the post.
+      const ticked = session.tick();
+      add(dir, 'late');
+      await Promise.all([posted, ticked]);
+      assert.deepEqual(changedFiles(session, 0).sort(), ['src/early.ts', 'src/late.ts']);
+    } finally {
+      await session.stop();
+    }
+  });
+
+  it('rejects invalid input with the error of the inbox, without an .error file', async () => {
+    const dir = repo();
+    const session = await started(dir);
+    try {
+      const bad = [{ message: '' }, { message: '  ' }, {}, { message: 1 }, { message: 'x', title: 1 }, { message: 'x', author: 1 }, { message: 'x', change: 'yes' }, null, 'text'];
+      for (const input of bad) {
+        const error = await session.post(input).then(
+          () => assert.fail(`${JSON.stringify(input)} was accepted`),
+          (e) => e,
+        );
+        writeFileSync(join(dir, '.dyffle/inbox/bad.json'), JSON.stringify(input));
+        await waitFor('the inbox rejection', () => existsSync(join(dir, '.dyffle/inbox/bad.error')));
+        assert.equal(`${error.message}\n`, readFileSync(join(dir, '.dyffle/inbox/bad.error'), 'utf8'));
+        unlinkSync(join(dir, '.dyffle/inbox/bad.error'));
+        await assert.rejects(session.post(input));
+        assert.deepEqual(readdirSync(join(dir, '.dyffle/inbox')), []);
+      }
+      assert.deepEqual(posts(session), []);
+      assert.equal((await session.post({ message: 'Good' })).id, 1);
+    } finally {
+      await session.stop();
+    }
+  });
+
+  it('rejects when the post cannot be made, and the next one takes its id', async () => {
+    const dir = repo();
+    const session = await started(dir);
+    try {
+      add(dir, 'one');
+      renameSync(join(dir, '.git'), join(dir, '.git-away'));
+      const failed = session.post({ message: 'Fails', change: true });
+      const next = failed.catch(() => {}).then(() => renameSync(join(dir, '.git-away'), join(dir, '.git'))).then(() => session.post({ message: 'Works', change: true }));
+      await assert.rejects(failed);
+      const p = await next;
+      assert.equal(p.id, 1);
+      assert.deepEqual(changedFiles(session, 1), ['src/one.ts']);
+    } finally {
+      await session.stop();
+    }
+  });
+
+  it('rejects on a session that is not started, and writes nothing', async () => {
+    const dir = repo();
+    const session = new LiveSession({ root: dir, baseRef: 'main' });
+    await assert.rejects(session.post({ message: 'Early' }), /not started/);
+    assert.ok(!existsSync(join(dir, '.dyffle')));
+    // Nor after a start that failed.
+    const failed = new LiveSession({ root: dir, baseRef: 'no-such-ref' });
+    await assert.rejects(failed.start());
+    await assert.rejects(failed.post({ message: 'Early' }), /not started/);
+    assert.deepEqual(readdirSync(join(dir, '.dyffle/posts')), []);
+  });
+
+  it('finishes posts accepted before stop(), and rejects those after it', async () => {
+    const dir = repo();
+    const session = await started(dir);
+    add(dir, 'one');
+    const accepted = session.post({ message: 'In time', change: true });
+    await session.stop();
+    assert.ok(existsSync(join(dir, '.dyffle/posts/0001.json')));
+    assert.equal((await accepted).id, 1);
+
+    await assert.rejects(session.post({ message: 'Late' }), /stopped/);
+    assert.deepEqual(posts(session).map((p) => p.id), [1]);
+    assert.ok(!existsSync(join(dir, '.dyffle/posts/0002.json')));
+    // A stopped session stays stopped, even through start(); a new one carries on.
+    await session.start();
+    await assert.rejects(session.post({ message: 'Late' }), /stopped/);
+    await session.stop();
+    const again = await started(dir);
+    try {
+      add(dir, 'two');
+      const p = await again.post({ message: 'Resumed', change: true });
+      assert.equal(p.id, 2);
+      assert.deepEqual(changedFiles(again, 2), ['src/two.ts']);
+    } finally {
+      await again.stop();
     }
   });
 });
