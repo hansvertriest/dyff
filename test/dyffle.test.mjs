@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reach, reachGraph, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, query, reach, reachGraph, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -229,6 +229,118 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     const { routes, testFiles } = reach(merged, id);
     assert.deepEqual(routes.map((r) => r.chain), [[id, 'src/reports/reports.controller.ts#ReportsController.user']]);
     assert.deepEqual(testFiles, []);
+  });
+
+  it('query: a changed symbol, with a signature change and untouched callers', () => {
+    const id = 'src/users/users.service.ts#UsersService.findOne';
+    const r = query(merged, 'UsersService.findOne');
+    assert.deepEqual(r.node, { id, kind: 'method', file: 'src/users/users.service.ts', range: node(merged, id).range, signature: 'async (id: number, withOrders = false)' });
+    assert.deepEqual(r.change, { status: 'modified', signatureChanged: true, previousSignature: 'async (id: number)' });
+    assert.deepEqual(r.callers, {
+      touched: ['src/orders/orders.service.ts#OrdersService.createForUser', 'src/users/users.controller.ts#UsersController.findOne'],
+      untouched: ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts'],
+    });
+    assert.ok(r.routes.some((x) => x.route === 'GET /api/reports/users/:id' && x.chain.at(-1) === 'src/reports/reports.controller.ts#ReportsController.user'));
+    assert.deepEqual(r.tests, ['src/users/users.service.spec.ts']);
+    assert.deepEqual(r.broken, []);
+    assert.ok(!JSON.stringify(r).includes('hunks'));
+    assert.deepEqual(query(merged, id), r);
+    assert.deepEqual(query(merged, id, { depth: 0 }).routes, []);
+  });
+
+  it('query: a removed symbol lists the references it broke', () => {
+    const r = query(merged, 'UsersService.findAllLegacy');
+    assert.deepEqual(r.change, { status: 'removed', signatureChanged: false });
+    assert.deepEqual(r.broken, [{
+      from: 'src/reports/reports.service.ts#ReportsService.exportUsers',
+      to: 'src/users/users.service.ts#UsersService.findAllLegacy',
+      file: 'src/reports/reports.service.ts',
+      maybeRenamedTo: 'src/users/users.service.ts#UsersService.findByEmail',
+    }]);
+  });
+
+  it('query: an unchanged symbol gets its routes and tests through reach, on a base index too', () => {
+    const id = 'src/reports/reports.service.ts#ReportsService.userSummary';
+    const r = query(merged, 'ReportsService.userSummary');
+    assert.equal(r.change, null);
+    assert.deepEqual(r.routes, [{ route: 'GET /api/reports/users/:id', chain: [id, 'src/reports/reports.controller.ts#ReportsController.user'] }]);
+    assert.deepEqual(r.tests, []);
+    assert.deepEqual(r.calls, ['src/users/users.service.ts#UsersService.findOne']);
+
+    const onBase = query(base, 'UsersService.findOne');
+    assert.equal(onBase.change, null);
+    assert.deepEqual(onBase.tests, ['src/users/users.service.spec.ts']);
+    assert.ok(onBase.routes.length);
+  });
+
+  it('query: calls leave out type-only uses', () => {
+    const n = merged.nodes.find((x) => x.typeUses?.length && x.uses.length > x.typeUses.length);
+    const r = query(merged, n.id);
+    assert.deepEqual(r.calls, n.uses.filter((u) => !n.typeUses.includes(u)));
+    for (const t of n.typeUses) assert.ok(!r.calls.includes(t));
+  });
+
+  it('query: a name that matches several nodes gives only candidates', () => {
+    const r = query(merged, 'findOne');
+    assert.deepEqual(Object.keys(r), ['candidates']);
+    assert.deepEqual(r.candidates.map((c) => c.id), [
+      'src/users/users.controller.ts#UsersController.findOne',
+      'src/users/users.resolver.ts#UsersResolver.findOne',
+      'src/users/users.service.ts#UsersService.findOne',
+    ]);
+    assert.deepEqual(r.candidates[0], { id: 'src/users/users.controller.ts#UsersController.findOne', kind: 'method', file: 'src/users/users.controller.ts' });
+  });
+
+  it('query: a class carries its members, where the routes and broken references are', () => {
+    const r = query(merged, 'UsersService');
+    assert.equal(r.node.kind, 'class');
+    assert.deepEqual(r.routes, []);
+    const legacy = r.members.find((m) => m.node.id.endsWith('.findAllLegacy'));
+    assert.equal(legacy.broken.length, 1);
+    assert.ok(r.members.find((m) => m.node.id.endsWith('.findOne')).routes.length);
+    assert.equal(query(merged, 'UsersService.findOne').members, undefined);
+  });
+
+  it('query: a file gives its change, imports and the impact of its top-level nodes', () => {
+    const path = 'src/users/users.service.ts';
+    const r = query(merged, path);
+    const f = merged.files.find((x) => x.path === path);
+    assert.deepEqual(r.file, { path, change: { status: 'modified', additions: f.change.additions, deletions: f.change.deletions }, imports: f.imports });
+    assert.deepEqual(r.symbols.map((s) => s.node.id), [path, `${path}#UsersService`]);
+    const findOne = r.symbols[1].members.find((m) => m.node.id.endsWith('.findOne'));
+    assert.equal(findOne.change.signatureChanged, true);
+    assert.deepEqual(findOne.callers.untouched, query(merged, 'UsersService.findOne').callers.untouched);
+
+    const gone = query(merged, 'src/orders/orders.repository.ts');
+    assert.equal(gone.file.change.status, 'removed');
+    assert.equal(gone.symbols[1].broken[0].from, 'src/orders/orders.module.ts#OrdersModule');
+
+    const same = query(merged, 'src/reports/reports.service.ts');
+    assert.equal(same.file.change, null);
+    assert.ok(same.file.imports.length);
+  });
+
+  it('query: no target summarizes the branch from its checks', () => {
+    const { summary, ...rest } = query(merged);
+    assert.deepEqual(rest, {});
+    const c = merged.checks;
+    assert.deepEqual(summary.danglingReferences, c.danglingReferences);
+    assert.deepEqual(summary.newModuleDependencies, c.newModuleDependencies);
+    assert.deepEqual(summary.newCycles, c.newCycles);
+    assert.deepEqual(summary.newFileCycles, c.newFileCycles);
+    assert.deepEqual(summary.untested, c.untested);
+    assert.deepEqual(summary.signatureChanges, [{
+      id: 'src/users/users.service.ts#UsersService.findOne',
+      before: 'async (id: number)',
+      after: 'async (id: number, withOrders = false)',
+      callersOutsidePr: ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts'],
+    }]);
+  });
+
+  it('query: throws when nothing matches, and on a summary without checks', () => {
+    assert.throws(() => query(merged, 'NoSuchThing'), /Nothing in the index matches "NoSuchThing"/);
+    assert.throws(() => query(merged, ''), /Nothing in the index matches/);
+    assert.throws(() => query(base), /needs a merged index, got a "base" index/);
   });
 
   it('keeps the base-side imports of changed files', () => {
@@ -463,6 +575,14 @@ describe('Vue fixture: single-file components and vue-router routes', () => {
   it('indexes script setup declarations at their line in the .vue file', () => {
     assert.deepEqual(node(base, 'src/views/OrdersView.vue#refresh').range, [7, 9]);
     assert.deepEqual(node(base, 'src/views/OrdersView.vue').range, [1, 21]);
+  });
+
+  it('query: a .vue file with no symbols keeps its callers and routes on the file node', () => {
+    const r = query(merged, 'src/components/OrderRow.vue');
+    assert.deepEqual(r.symbols.map((s) => s.node.id), ['src/components/OrderRow.vue']);
+    assert.deepEqual(r.symbols[0].callers.untouched, ['src/views/OrderDetail.vue']);
+    assert.deepEqual(r.symbols[0].callers.touched, ['src/views/OrdersView.vue']);
+    assert.equal(r.symbols[0].routes.length, 2);
   });
 
   it('links components and functions the template uses, and imports of .vue files through aliases', () => {
