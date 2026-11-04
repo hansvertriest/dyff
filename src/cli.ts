@@ -169,7 +169,7 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'serve': {
       const list = readMerged('serve').map((x) => ({ label: x.label, index: JSON.stringify(x.index) }));
-      const { url } = await serve(list.length === 1 ? list[0].index : list, { port: v.port ? Number(v.port) : undefined, host: v.host });
+      const { url } = await serve(list.length === 1 ? list[0].index : list, { port: v.port !== undefined ? Number(v.port) : undefined, host: v.host });
       process.stderr.write(`dyffle viewer running at ${url}  (Ctrl+C to stop)\n`);
       break;
     }
@@ -177,7 +177,7 @@ async function main(argv: string[]): Promise<void> {
       if (!v['base-ref']) throw new UsageError('Pass --base-ref <ref>, the branch the work targets (e.g. origin/main).');
       const session = new LiveSession({ ...project, baseRef: v['base-ref'], depth, log: log ?? (() => {}) });
       await session.start();
-      const { url } = await serve(session, { port: v.port ? Number(v.port) : undefined, host: v.host });
+      const { url } = await serve(session, { port: v.port !== undefined ? Number(v.port) : undefined, host: v.host });
       session.announce(url);
       process.stderr.write(`dyffle watching ${session.root} at ${url}  (Ctrl+C to stop)\n`);
       const quit = () => {

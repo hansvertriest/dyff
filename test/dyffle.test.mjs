@@ -1266,3 +1266,66 @@ describe('unannounce', () => {
     });
   });
 });
+
+describe('--port 0', () => {
+  const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+  let roots = [];
+  const tempDir = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    roots.push(dir);
+    return dir;
+  };
+  after(() => roots.forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+
+  /** Run the CLI until it prints its URL, call check(url), stop it. */
+  const whileRunning = async (args, check) => {
+    const child = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const exit = new Promise((r) => child.once('exit', r));
+    try {
+      let stderr = '';
+      const url = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`No URL printed:\n${stderr}`)), 60000);
+        child.stderr.on('data', (chunk) => {
+          stderr += chunk;
+          const found = /at (http:\/\/\S+)\s/.exec(stderr)?.[1];
+          if (found) {
+            clearTimeout(timer);
+            resolve(found);
+          }
+        });
+        exit.then(() => {
+          clearTimeout(timer);
+          reject(new Error(`Exited early:\n${stderr}`));
+        });
+      });
+      const { hostname, port } = new URL(url);
+      assert.equal(hostname, '127.0.0.1');
+      assert.ok(Number(port) > 0);
+      assert.notEqual(port, '4173');
+      await check(url);
+    } finally {
+      child.kill('SIGTERM');
+      await exit;
+    }
+  };
+
+  it('dyffle serve binds a free port and prints its real URL', async () => {
+    const file = join(tempDir(), 'merged.json');
+    writeFileSync(file, JSON.stringify({ checks: {}, marker: 'port-zero' }));
+    await whileRunning(['serve', file, '--port', '0'], async (url) => {
+      assert.equal((await (await fetch(url + 'index.json')).json()).marker, 'port-zero');
+    });
+  });
+
+  it('dyffle watch binds a free port, prints its real URL and announces it', async () => {
+    const dir = tempDir();
+    cpSync(join(fixture, 'base'), dir, { recursive: true });
+    git(dir, 'init', '-q', '-b', 'main');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    await whileRunning(['watch', '--base-ref', 'main', '--root', dir, '--port', '0'], async (url) => {
+      assert.equal(JSON.parse(readFileSync(join(dir, '.dyffle/server.json'), 'utf8')).url, url);
+      assert.ok((await (await fetch(url + 'views.json')).json()).views.length);
+    });
+  });
+});
