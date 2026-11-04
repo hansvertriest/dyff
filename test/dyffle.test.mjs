@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, reach, reachGraph, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -208,6 +208,29 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.ok(merged.checks.untested.includes('src/users/users.service.ts#UsersService.findByEmail'));
   });
 
+  it('reach gives the route chains and test files of an unchanged symbol', () => {
+    const id = 'src/users/users.service.ts#UsersService.findOne';
+    assert.equal(node(base, id).change, undefined);
+    const { routes, testFiles } = reach(base, id);
+    const route = routes.find((r) => r.route.fullPath === '/reports/users/:id');
+    assert.equal(route.routeId, 'src/reports/reports.controller.ts#ReportsController.user');
+    assert.equal(route.changed, id);
+    assert.deepEqual(route.chain, [
+      id,
+      'src/reports/reports.service.ts#ReportsService.userSummary',
+      'src/reports/reports.controller.ts#ReportsController.user',
+    ]);
+    assert.deepEqual(testFiles, ['src/users/users.service.spec.ts']);
+  });
+
+  it('reach works on an unchanged symbol of a merged index', () => {
+    const id = 'src/reports/reports.service.ts#ReportsService.userSummary';
+    assert.equal(node(merged, id).change, undefined);
+    const { routes, testFiles } = reach(merged, id);
+    assert.deepEqual(routes.map((r) => r.chain), [[id, 'src/reports/reports.controller.ts#ReportsController.user']]);
+    assert.deepEqual(testFiles, []);
+  });
+
   it('keeps the base-side imports of changed files', () => {
     const file = (p) => merged.files.find((f) => f.path === p);
     const resolved = (imports) => imports.map((i) => i.resolved).filter(Boolean);
@@ -278,6 +301,43 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.match(md, /This PR breaks 2 references/);
     assert.match(md, /GET \/api\/reports\/users\/:id/);
     assert.match(md, /`src\/auth` ⇄ `src\/users`/);
+  });
+});
+
+describe('reach', () => {
+  const route = { verb: 'GET', path: '/x', fullPath: '/x' };
+  // a <- b <- c (route) <- d (test). t uses a as a type only, and t2 (a route) uses b as a type only.
+  const nodes = [
+    { id: 'a', file: 'a.ts', references: ['b', 't'] },
+    { id: 'b', file: 'b.ts', references: ['c', 't2'] },
+    { id: 'c', file: 'c.ts', references: ['d'], route },
+    { id: 'd', file: 'd.spec.ts', references: [], test: true },
+    { id: 't', file: 't.ts', references: ['tr'], typeUses: ['a'] },
+    { id: 'tr', file: 'tr.ts', references: [], route },
+    { id: 't2', file: 't2.ts', references: [], typeUses: ['b'], route },
+  ];
+  const index = { nodes };
+  const chains = (r) => r.routes.map((x) => x.chain.join('>'));
+
+  it('follows a type-only reference one step from the start node, and no further', () => {
+    assert.deepEqual(chains(reach(index, 'a')), ['a>b>c']);
+    assert.deepEqual(chains(reach(index, 't')), ['t>tr']);
+    assert.deepEqual(chains(reach(index, 'b')), ['b>c', 'b>t2']);
+  });
+
+  it('stops at the depth limit', () => {
+    assert.deepEqual(reach(index, 'a', { depth: 1 }), { routes: [], testFiles: [] });
+    assert.deepEqual(chains(reach(index, 'a', { depth: 2 })), ['a>b>c']);
+    assert.deepEqual(reach(index, 'a', { depth: 2 }).testFiles, []);
+    assert.deepEqual(reach(index, 'a', { depth: 3 }).testFiles, ['d.spec.ts']);
+  });
+
+  it('gives the same result with a prepared graph', () => {
+    assert.deepEqual(reach(index, 'a', { graph: reachGraph(index) }), reach(index, 'a'));
+  });
+
+  it('throws on a node that is not in the index', () => {
+    assert.throws(() => reach(index, 'nope'), /Unknown node "nope"/);
   });
 });
 

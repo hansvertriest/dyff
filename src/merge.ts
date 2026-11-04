@@ -1,4 +1,5 @@
 import { finalize } from './finalize.js';
+import { reach, reachGraph } from './reach.js';
 import type { AffectedRoute, Checks, DanglingReference, Index, ModuleEdge, SignatureChange, SymbolNode, TestReach } from './schema.js';
 
 export interface MergeOptions {
@@ -232,47 +233,19 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
     (n) => (n.kind !== 'file' || n.file.endsWith('.vue')) && !n.test && !(n.kind === 'class' && changedParents.has(n.id)),
   );
 
-  // A type-only reference (annotation, generic, implements) is followed one step, from the
-  // changed symbol itself, and the search stops there: the referrer's runtime code is unchanged.
-  const typeOnly = new Set(merged.nodes.flatMap((n) => (n.typeUses ?? []).map((t) => `${n.id}|${t}`)));
+  const graph = reachGraph(merged);
   const affected = new Map<string, AffectedRoute>();
   const tests: TestReach[] = [];
   const untested: string[] = [];
   for (const seed of seeds) {
-    const prev = new Map<string, string | null>([[seed.id, null]]);
-    let frontier = [seed.id];
-    const viaType = new Set<string>();
-    const testFiles = new Set<string>();
-    for (let d = 0; d <= depth && frontier.length; d++) {
-      const next: string[] = [];
-      for (const id of frontier) {
-        const n = byId.get(id)!;
-        if (n.test) {
-          testFiles.add(n.file);
-          continue;
-        }
-        if (n.route) {
-          const chain: string[] = [];
-          for (let c: string | null = id; c; c = prev.get(c) ?? null) chain.unshift(c);
-          const existing = affected.get(id);
-          if (!existing || existing.chain.length > chain.length) affected.set(id, { routeId: id, route: n.route, changed: seed.id, chain });
-        }
-        if (viaType.has(id)) continue;
-        for (const r of n.references) {
-          if (prev.has(r) || !byId.has(r)) continue;
-          if (typeOnly.has(`${r}|${id}`)) {
-            if (d > 0) continue;
-            viaType.add(r);
-          }
-          prev.set(r, id);
-          next.push(r);
-        }
-      }
-      frontier = next;
+    const { routes, testFiles } = reach(merged, seed.id, { depth, graph });
+    for (const r of routes) {
+      const existing = affected.get(r.routeId);
+      if (!existing || existing.chain.length > r.chain.length) affected.set(r.routeId, r);
     }
     if (!CODE_KINDS.has(seed.kind) || seed.change?.status === 'removed') continue;
-    tests.push({ id: seed.id, testFiles: [...testFiles].sort() });
-    if (!testFiles.size) untested.push(seed.id);
+    tests.push({ id: seed.id, testFiles });
+    if (!testFiles.length) untested.push(seed.id);
   }
 
   const changedModules = new Set<string>();
