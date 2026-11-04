@@ -4,6 +4,7 @@ export { parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './dif
 export { finalize, moduleAssigner } from './finalize.js';
 export { buildBaseIndex, buildOverlay, type OverlayOptions } from './indexer.js';
 export { fileEdges, findCycles, merge, moduleEdges, rebase, type MergeOptions } from './merge.js';
+export { reach, reachGraph, type Reach, type ReachGraph, type ReachOptions } from './reach.js';
 export { EMBED_END, EMBED_START, embedSection, markdownReport, routeLabel, type ReportOptions } from './report.js';
 export { mermaidModuleMap, type MermaidOptions } from './mermaid.js';
 export { serve, standaloneHtml, type LabeledIndex, type LiveSource, type ServeOptions } from './serve.js';
