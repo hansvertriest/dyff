@@ -172,12 +172,13 @@ export class LiveSession implements LiveSource {
     writeFileSync(join(this.dir, '.gitignore'), '*\n');
     this.loadPosts();
     this.loadState();
+    // Git reuses the id of a removed worktree: its refs are a dead session's, as nothing here names them.
+    const id = this.state || this.posts.length ? undefined : worktreeId(this.root);
+    if (id) deleteWorktreeRefs(this.root, id);
     this.ensureBase();
-    this.rebuildLive(worktreeTree(this.root));
+    // Git may have collected anything while no session was running, so look at the whole tree once.
+    this.rebuildLive(this.workingTree(true));
     if (!this.state) {
-      // Git reuses the id of a removed worktree: its refs are a dead session's, as nothing here names them.
-      const id = this.posts.length ? undefined : worktreeId(this.root);
-      if (id) deleteWorktreeRefs(this.root, id);
       // Posts measure change from here, not from the merge base: what was already on the branch isn't part of them.
       const snapshot = commitTree(this.root, this.live!.tree, 'dyffle start', this.snapshotRef('start'));
       this.saveState({ snapshot, index: rebase(JSON.parse(this.live!.json) as Index, snapshot) });
@@ -267,7 +268,8 @@ export class LiveSession implements LiveSource {
       }
     }
     if (!object || !files?.has(path)) return undefined;
-    const text = showFile(this.root, object, path);
+    let text = showFile(this.root, object, path);
+    if (text === undefined && key === 'live' && this.restoreLive(object)) text = showFile(this.root, object, path);
     return text === undefined ? undefined : JSON.stringify({ key, path, text });
   }
 
@@ -348,7 +350,7 @@ export class LiveSession implements LiveSource {
     return this.serial(async () => {
       for (const name of this.inbox()) await this.busy(`post ${name}`, () => this.ingest(name));
       const moved = this.ensureBase();
-      const tree = worktreeTree(this.root);
+      const tree = this.workingTree();
       if (moved || tree !== this.live?.tree) await this.busy('branch', () => this.rebuildLive(tree));
     });
   }
@@ -471,12 +473,42 @@ export class LiveSession implements LiveSource {
     const built = !merged;
     merged ??= this.branchDyffle(tree, new Analyzer(this.project));
     const json = JSON.stringify(merged);
+    this.keepLive(tree);
     this.live = { tree, json, generatedAt: merged.generatedAt, files: sourceFiles(merged) };
     // dyffle query reads this file at any moment, so it must never be half written.
     writeFileSync(join(this.dir, 'live.json.tmp'), json);
     renameSync(join(this.dir, 'live.json.tmp'), join(this.dir, 'live.json'));
     this.log(`Branch dyffle updated: ${merged.checks!.summary.filesChanged} files changed${built ? ` (${Date.now() - started} ms)` : ''}`);
     this.emit('live', { generatedAt: merged.generatedAt });
+  }
+
+  /**
+   * Keep the live tree from git gc: nothing else refers to work that isn't posted or committed. The ref
+   * names the tree itself, as a commit on top of HEAD for every rebuild would only add to `git log --all`.
+   */
+  private keepLive(tree: string): void {
+    git(this.root, ['update-ref', this.snapshotRef('live'), tree]);
+  }
+
+  /** The working tree as a git tree, repairing what git gc took. A repair that gives the live tree needs no rebuild, only the ref. */
+  private workingTree(deep = false): string {
+    let repaired = false;
+    const onRepair = () => {
+      repaired = true;
+      this.log('Rebuilding the git index of the live dyffle: git gc removed objects it names');
+    };
+    const tree = worktreeTree(this.root, { deep, onRepair });
+    if (repaired && tree === this.live?.tree) this.keepLive(tree);
+    return tree;
+  }
+
+  /** After reading a file of the live tree failed: whether the objects of that tree are back, which takes the working tree still being that tree. */
+  private restoreLive(tree: string): boolean {
+    try {
+      return this.workingTree(true) === tree;
+    } catch {
+      return false;
+    }
   }
 
   private inbox(): string[] {
@@ -536,7 +568,7 @@ export class LiveSession implements LiveSource {
   /** Snapshot the working tree and attach a dyffle of what changed since the previous snapshot. */
   private attachChange(post: Post): void {
     this.ensureBase();
-    const tree = worktreeTree(this.root);
+    const tree = this.workingTree();
     const snapshot = commitTree(this.root, tree, `dyffle post #${post.id}`, this.snapshotRef(`posts/${post.id}`));
     const prev = this.state!;
     post.snapshot = snapshot;

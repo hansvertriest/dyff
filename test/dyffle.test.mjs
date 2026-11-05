@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -1128,7 +1128,7 @@ describe('snapshot refs', () => {
       }
       assert.notEqual(sides[0].posts[0].from, sides[1].posts[0].from);
       assert.notEqual(worktreeId(sides[0].root), worktreeId(sides[1].root));
-      assert.equal(refs(main).length, 6);
+      assert.equal(refs(main).length, 8);
       assert.ok(refs(main).every((r) => r.startsWith('refs/dyffle/worktrees/')));
       assert.deepEqual(refs(main, 'refs/worktree'), []);
     } finally {
@@ -1142,7 +1142,7 @@ describe('snapshot refs', () => {
       for (const from of [main, sides[0].root, sides[1].root]) {
         git(from, 'gc', '--prune=now', '--quiet');
         for (const { root, session, posts } of sides) {
-          assert.equal(refs(root).length, 6);
+          assert.equal(refs(root).length, 8);
           for (const p of posts) {
             for (const commit of [p.from, p.snapshot]) assert.equal(git(root, 'cat-file', '-t', commit).trim(), 'commit');
             assert.equal(git(root, 'diff', '--name-only', p.from, p.snapshot).trim(), p.file);
@@ -1151,7 +1151,7 @@ describe('snapshot refs', () => {
           }
         }
         // Without a format too: that one needs the objects, and fails on a dangling ref.
-        for (const root of [main, ...sides.map((s) => s.root)]) assert.equal(git(root, 'for-each-ref', 'refs/dyffle').trim().split('\n').length, 6);
+        for (const root of [main, ...sides.map((s) => s.root)]) assert.equal(git(root, 'for-each-ref', 'refs/dyffle').trim().split('\n').length, 8);
       }
       for (const { root, session, posts } of sides) {
         const file = 'pkg/src/after-gc.ts';
@@ -1172,18 +1172,18 @@ describe('snapshot refs', () => {
     const [{ root, session, posts: old }, other] = sides;
     const id = worktreeId(root);
     const otherRefs = refs(main, `refs/dyffle/worktrees/${worktreeId(other.root)}`);
-    assert.equal(otherRefs.length, 3);
+    assert.equal(otherRefs.length, 4);
     try {
       await session.stop();
       git(main, 'worktree', 'remove', '--force', root);
       git(main, 'worktree', 'add', '-q', '--detach', root, 'main');
       assert.equal(worktreeId(root), id);
-      assert.equal(refs(main, `refs/dyffle/worktrees/${id}`).length, 3);
+      assert.equal(refs(main, `refs/dyffle/worktrees/${id}`).length, 4);
 
       writeFileSync(join(root, 'pkg/src/new-start.ts'), "export const start = 'new';\n");
       const fresh = await start(root);
       const ns = `refs/dyffle/worktrees/${id}`;
-      assert.deepEqual(refs(main, ns), [`${ns}/start`]);
+      assert.deepEqual(refs(main, ns), [`${ns}/live`, `${ns}/start`]);
       assert.notEqual(rev(root, `${ns}/start`), old[0].from);
       assert.deepEqual(fresh.labels(), ['Branch (live)']);
 
@@ -1192,7 +1192,7 @@ describe('snapshot refs', () => {
       const post = await fresh.post({ message: 'new', change: true });
       assert.equal(post.id, 1);
       assert.equal(post.from, rev(root, `${ns}/start`));
-      assert.deepEqual(refs(main, ns), [`${ns}/posts/1`, `${ns}/start`]);
+      assert.deepEqual(refs(main, ns), [`${ns}/live`, `${ns}/posts/1`, `${ns}/start`]);
       assert.notEqual(post.snapshot, old[0].snapshot);
       assert.equal(git(root, 'diff', '--name-only', post.from, post.snapshot).trim(), file);
       await fresh.stop();
@@ -1218,17 +1218,17 @@ describe('snapshot refs', () => {
       const id = worktreeId(gone.root);
       const others = () => refs(main).filter((r) => !r.startsWith(`refs/dyffle/worktrees/${id}/`));
       const othersBefore = others().map((r) => [r, rev(main, r)]);
-      assert.deepEqual(others().filter((r) => !r.startsWith('refs/dyffle/worktrees/')), ['refs/dyffle/posts/1', 'refs/dyffle/start']);
+      assert.deepEqual(others().filter((r) => !r.startsWith('refs/dyffle/worktrees/')), ['refs/dyffle/live', 'refs/dyffle/posts/1', 'refs/dyffle/start']);
       // Git numbers ids that clash, so one id is a prefix of the other: wt and wt1.
       assert.deepEqual([id, worktreeId(kept.root)], ['wt', 'wt1']);
-      assert.equal(refs(main).length, 8);
+      assert.equal(refs(main).length, 11);
 
       assert.throws(() => removeWorktreeRefs(main, id), /still has this worktree/);
-      assert.equal(refs(main).length, 8);
+      assert.equal(refs(main).length, 11);
 
       await gone.session.stop();
       git(main, 'worktree', 'remove', '--force', gone.root);
-      assert.equal(removeWorktreeRefs(kept.root, id), 3);
+      assert.equal(removeWorktreeRefs(kept.root, id), 4);
       assert.deepEqual(refs(main, `refs/dyffle/worktrees/${id}`), []);
       assert.deepEqual(others().map((r) => [r, rev(main, r)]), othersBefore);
 
@@ -1260,12 +1260,304 @@ describe('snapshot refs', () => {
         const post = await session.post({ message: 'b', change: true });
         assert.equal(rev(main, `refs/dyffle/posts/${post.id}`), post.snapshot);
         assert.equal(rev(main, 'refs/dyffle/start'), post.from);
-        assert.deepEqual(refs(main), ['refs/dyffle/posts/1', 'refs/dyffle/start']);
+        assert.deepEqual(refs(main), ['refs/dyffle/live', 'refs/dyffle/posts/1', 'refs/dyffle/start']);
       } finally {
         await session.stop();
       }
       rmSync(join(root, '.dyffle'), { recursive: true });
     }
+  });
+
+  describe('git gc and work that is not posted', () => {
+    const WIP = 'pkg/src/wip.ts';
+    const TEXT = 'export const wip = 1;\n';
+    const liveText = (session) => JSON.parse(session.source('live', WIP) ?? 'null')?.text;
+    const gc = (root) => git(root, 'gc', '--prune=now', '--quiet');
+    const liveRef = (root) => {
+      const id = worktreeId(root);
+      return id ? `refs/dyffle/worktrees/${id}/live` : 'refs/dyffle/live';
+    };
+    /**
+     * A file only the live tree refers to: written after the session's first snapshot. Git's stat cache
+     * trusts it, as it does after a pause; git hashes a file from the last second again, which hides the bug.
+     * So a second version of a file needs another size to be seen.
+     */
+    const addWip = async (root, session, file = WIP, text = TEXT) => {
+      writeFileSync(join(root, file), text);
+      const old = new Date(Date.now() - 3600_000);
+      utimesSync(join(root, file), old, old);
+      await session.tick();
+      assert.equal(JSON.parse(session.source('live', file)).text, text);
+    };
+    /** The live view reads, and the next post attaches the file. Measures from the stored `from` snapshot, so that one is checked too. */
+    const assertWorks = async (root, session) => {
+      assert.equal(liveText(session), TEXT);
+      const post = await session.post({ message: 'after gc', change: true });
+      assert.ok(post.dyffle, post.note);
+      assert.equal(git(root, 'diff', '--name-only', post.from, post.snapshot).trim(), WIP);
+      assert.equal(git(root, 'show', `${post.snapshot}:./${WIP}`), TEXT);
+      assert.equal(liveText(session), TEXT);
+      assert.ok(session.source(`post-${post.id}`, WIP));
+    };
+
+    it('keeps the live tree of a main worktree, off any branch and out of the real index', async () => {
+      const main = repo();
+      const head = rev(main, 'HEAD');
+      const session = await start(main);
+      try {
+        await addWip(main, session);
+        assert.equal(git(main, 'cat-file', '-t', 'refs/dyffle/live').trim(), 'tree');
+        gc(main);
+        assert.equal(git(main, 'rev-parse', `refs/dyffle/live:./${WIP}`).trim(), git(main, 'hash-object', WIP).trim());
+        assert.equal(git(main, 'status', '--porcelain', '--', WIP), `?? ${WIP}\n`);
+        assert.equal(rev(main, 'HEAD'), head);
+        assert.equal(git(main, 'branch', '--format=%(refname)').trim(), 'refs/heads/main');
+        await assertWorks(main, session);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('moves the live ref with every rebuild, and lets go of the old tree', async () => {
+      const main = repo();
+      const session = await start(main);
+      try {
+        await addWip(main, session);
+        const first = rev(main, 'refs/dyffle/live');
+        await addWip(main, session, WIP, 'export const wip = 22;\n');
+        assert.notEqual(rev(main, 'refs/dyffle/live'), first);
+        gc(main);
+        assert.ok(!exists(main, first));
+        assert.equal(JSON.parse(session.source('live', WIP)).text, 'export const wip = 22;\n');
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('keeps the live tree of a linked worktree through gc run from other worktrees', async () => {
+      const main = repo();
+      const root = linked(main);
+      const other = linked(main);
+      const session = await start(root);
+      try {
+        await addWip(root, session);
+        assert.equal(git(root, 'cat-file', '-t', `refs/dyffle/worktrees/${worktreeId(root)}/live`).trim(), 'tree');
+        assert.deepEqual(refs(main, 'refs/worktree'), []);
+        gc(main);
+        assert.equal(liveText(session), TEXT);
+        gc(other);
+        await assertWorks(root, session);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('keeps it across a stop, along with the snapshot in state.json', async () => {
+      const main = repo();
+      const first = await start(main);
+      try {
+        await addWip(main, first);
+      } finally {
+        await first.stop();
+      }
+      gc(main);
+      const { snapshot } = JSON.parse(readFileSync(join(main, '.dyffle/state.json'), 'utf8'));
+      assert.equal(snapshot, rev(main, 'refs/dyffle/start'));
+      assert.equal(git(main, 'cat-file', '-t', snapshot).trim(), 'commit');
+      const session = await start(main);
+      try {
+        await assertWorks(main, session);
+        const [post] = JSON.parse(session.feed()).posts;
+        assert.equal(post.from, snapshot);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    /** What an older session left: objects only its index refers to, pruned. */
+    const prune = (root) => {
+      git(root, 'update-ref', '-d', liveRef(root));
+      gc(root);
+    };
+
+    it('repairs a running session whose objects were pruned', async () => {
+      const main = repo();
+      const session = await start(main);
+      try {
+        await addWip(main, session);
+        const tree = rev(main, 'refs/dyffle/live');
+        prune(main);
+        assert.ok(!exists(main, tree));
+        // Right away, without waiting for a tick.
+        assert.equal(liveText(session), TEXT);
+        assert.equal(rev(main, 'refs/dyffle/live'), tree);
+        // The ref came back with the objects, though the tree is the same and nothing rebuilt.
+        gc(main);
+        assert.equal(liveText(session), TEXT);
+        prune(main);
+        await session.tick();
+        assert.equal(rev(main, 'refs/dyffle/live'), tree);
+        prune(main);
+        await assertWorks(main, session);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('repairs one where another file changed too, so that write-tree fails', async () => {
+      const main = repo();
+      const session = await start(main);
+      try {
+        await addWip(main, session);
+        prune(main);
+        writeFileSync(join(main, 'pkg/src/a.ts'), 'export const a = 2;\n');
+        const post = await session.post({ message: 'both', change: true });
+        assert.deepEqual(git(main, 'diff', '--name-only', post.from, post.snapshot).trim().split('\n'), ['pkg/src/a.ts', WIP]);
+        assert.equal(liveText(session), TEXT);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('repairs a session started after its objects were pruned, on a main and a linked worktree', async () => {
+      // One repository each: a post in the first would keep the same tree for the second.
+      for (const root of [repo(), linked(repo())]) {
+        const first = await start(root);
+        try {
+          await addWip(root, first);
+        } finally {
+          await first.stop();
+        }
+        const tree = rev(root, liveRef(root));
+        prune(root);
+        assert.ok(!exists(root, tree));
+        const session = await start(root);
+        try {
+          assert.equal(rev(root, liveRef(root)), tree);
+          await assertWorks(root, session);
+        } finally {
+          await session.stop();
+        }
+      }
+    });
+
+    /** Lose a blob but not its tree, as a gc that was interrupted can. write-tree doesn't notice: it trusts the tree it cached. */
+    const dropBlob = (root) => {
+      const blob = rev(root, `refs/dyffle/live:./${WIP}`);
+      rmSync(join(root, '.git/objects', blob.slice(0, 2), blob.slice(2)));
+      assert.ok(!exists(root, blob));
+      return blob;
+    };
+
+    it('repairs a missing blob under a tree that is there, when reading it fails', async () => {
+      const main = repo();
+      const session = await start(main);
+      try {
+        await addWip(main, session);
+        const blob = dropBlob(main);
+        assert.equal(liveText(session), TEXT);
+        assert.ok(exists(main, blob));
+        await assertWorks(main, session);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('repairs a missing blob under a tree that is there, when it starts', async () => {
+      const main = repo();
+      const first = await start(main);
+      try {
+        await addWip(main, first);
+      } finally {
+        await first.stop();
+      }
+      const blob = dropBlob(main);
+      const session = await start(main);
+      try {
+        assert.ok(exists(main, blob));
+        await assertWorks(main, session);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('keeps tracked files that are ignored when it repairs', async () => {
+      const main = repo();
+      writeFileSync(join(main, '.gitignore'), 'pkg/src/tracked.ts\n');
+      writeFileSync(join(main, 'pkg/src/tracked.ts'), 'export const t = 1;\n');
+      git(main, 'add', '-f', '.gitignore', 'pkg/src/tracked.ts');
+      git(main, 'commit', '-qm', 'tracked and ignored');
+      const session = await start(main);
+      try {
+        await addWip(main, session);
+        const tree = rev(main, 'refs/dyffle/live');
+        prune(main);
+        await session.tick();
+        assert.equal(rev(main, 'refs/dyffle/live'), tree);
+        assert.match(git(main, 'ls-tree', '-r', '--name-only', tree), /pkg\/src\/tracked\.ts/);
+      } finally {
+        await session.stop();
+      }
+    });
+
+    it('removeWorktreeRefs removes the live ref, and gc then the tree', async () => {
+      const main = repo();
+      const root = linked(main);
+      const keptRoot = linked(main);
+      const session = await start(root);
+      const kept = await start(keptRoot);
+      try {
+        await addWip(root, session, 'pkg/src/gone.ts', 'export const gone = 1;\n');
+        await addWip(keptRoot, kept);
+        const id = worktreeId(root);
+        const ref = `refs/dyffle/worktrees/${id}/live`;
+        const tree = rev(main, ref);
+        const keptLive = rev(main, liveRef(keptRoot));
+        await session.stop();
+        git(main, 'worktree', 'remove', '--force', root);
+        assert.ok(refs(main).includes(ref));
+        assert.equal(removeWorktreeRefs(main, id), 2);
+        assert.deepEqual(refs(main, `refs/dyffle/worktrees/${id}`), []);
+        assert.equal(rev(main, liveRef(keptRoot)), keptLive);
+        gc(main);
+        assert.ok(exists(main, keptLive));
+        assert.equal(liveText(kept), TEXT);
+        assert.ok(!exists(main, tree));
+      } finally {
+        await session.stop();
+        await kept.stop();
+      }
+    });
+
+    it('leaves for-each-ref and plain git gc working in every worktree', async () => {
+      const main = repo();
+      const roots = [main, linked(main), linked(main)];
+      const sessions = [];
+      try {
+        for (const root of roots) {
+          const session = await start(root);
+          sessions.push(session);
+          await addWip(root, session);
+          await session.post({ message: 'one post', change: true });
+          await addWip(root, session, 'pkg/src/wip2.ts', `export const again = '${root}';\n`);
+        }
+        for (const from of roots) {
+          // Without a format too: that one needs the objects.
+          assert.equal(git(from, 'for-each-ref', 'refs/dyffle').trim().split('\n').length, 9);
+          git(from, 'gc', '--quiet');
+          gc(from);
+          assert.equal(git(from, 'for-each-ref', 'refs/dyffle').trim().split('\n').length, 9);
+          git(from, 'log', '--all', '--oneline');
+          git(from, 'fsck', '--full', '--no-dangling');
+          roots.forEach((root, i) => {
+            assert.equal(git(root, 'cat-file', '-t', liveRef(root)).trim(), 'tree');
+            assert.match(JSON.parse(sessions[i].source('live', 'pkg/src/wip2.ts')).text, /again/);
+          });
+        }
+      } finally {
+        await Promise.all(sessions.map((s) => s.stop()));
+      }
+    });
   });
 });
 

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 const MAX_BUFFER = 512 * 1024 * 1024;
@@ -14,9 +14,9 @@ export function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): strin
   });
 }
 
-export function tryGit(cwd: string, args: string[]): string | undefined {
+export function tryGit(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string | undefined {
   try {
-    return git(cwd, args).trim();
+    return git(cwd, args, env).trim();
   } catch {
     return undefined;
   }
@@ -92,19 +92,44 @@ export function showFile(cwd: string, commit: string, path: string): string | un
 }
 
 /**
+ * Whether a tree's objects are there. One process normally; `deep` also walks its subtrees and blobs,
+ * which takes as long as the tree is big. Submodules are not followed, and the blobs a partial clone
+ * never fetched count as there and are not fetched. That option passes a missing start point too,
+ * hence the first check.
+ */
+function treeIntact(cwd: string, tree: string, deep: boolean): boolean {
+  if (tryGit(cwd, ['cat-file', '-e', tree]) === undefined) return false;
+  return !deep || tryGit(cwd, ['rev-list', '--objects', '--quiet', '--missing=allow-promisor', tree]) !== undefined;
+}
+
+/**
  * The working tree as a git tree, untracked files included and ignored files
  * left out, without touching the real index. A separate index file under .git
  * keeps the stat cache between calls, so an unchanged tree is quick to hash.
+ *
+ * git gc doesn't read that file, so it can name objects gc has pruned, and git trusts its stat cache
+ * instead of hashing the files again: write-tree then fails, or gives a tree that isn't there. Such an
+ * index is replaced and the tree written again from the working tree, after calling `onRepair`.
+ * `deep` makes this notice missing subtrees and blobs under a tree that is there as well.
  */
-export function worktreeTree(cwd: string): string {
+export function worktreeTree(cwd: string, opts: { deep?: boolean; onRepair?: () => void } = {}): string {
   const top = git(cwd, ['rev-parse', '--show-toplevel']).trim();
   const own = resolve(cwd, git(cwd, ['rev-parse', '--git-path', 'dyffle-index']).trim());
-  if (!existsSync(own)) {
-    const real = resolve(cwd, git(cwd, ['rev-parse', '--git-path', 'index']).trim());
-    if (existsSync(real)) copyFileSync(real, own);
-  }
   const env = { GIT_INDEX_FILE: own };
-  git(top, ['add', '-A', '--', '.'], env);
+  const add = () => {
+    if (!existsSync(own)) {
+      // From the real index, whose objects gc keeps, and which holds the tracked files that are ignored.
+      const real = resolve(cwd, git(cwd, ['rev-parse', '--git-path', 'index']).trim());
+      if (existsSync(real)) copyFileSync(real, own);
+    }
+    git(top, ['add', '-A', '--', '.'], env);
+  };
+  add();
+  const tree = tryGit(top, ['write-tree'], env);
+  if (tree && treeIntact(top, tree, opts.deep ?? false)) return tree;
+  opts.onRepair?.();
+  rmSync(own, { force: true });
+  add();
   return git(top, ['write-tree'], env).trim();
 }
 
