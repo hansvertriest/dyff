@@ -131,7 +131,7 @@ It serves the viewer on http://127.0.0.1:4173 and keeps three kinds of dyffle up
 - **One per commit.** Every commit on the branch since the merge base, oldest first, each against its parent. Only first parents are followed, so a merged-in branch shows as its merge commit. A commit is built once, from a copy of its files, and cached. When a commit leaves the branch (amend, rebase, reset), its dyffle goes too.
 - **Uncommitted.** The working tree against `HEAD`, untracked files included, rebuilt whenever a file changes.
 
-The page updates on its own and stays on the dyffle it shows, also when a new commit appears. While you are writing a review comment it offers the update instead. Snapshots of the working tree are git trees written with a separate index file, so the real git index is not touched. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
+The page updates on its own and stays on the dyffle it shows, also when a new commit appears. While you are writing a review comment it offers the update instead. Snapshots of the working tree are git trees written with a separate index file, so the real git index is not touched. The ref `refs/dyffle/live` points at the tree of the live dyffles, so `git gc` keeps uncommitted work they show; in a linked worktree it is `refs/dyffle/worktrees/<id>/live`, with git's id of that worktree, so sessions on several worktrees of one repository don't overwrite each other's. A session that finds objects missing anyway (from a gc before this ref existed, say) writes them again from the working tree. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
 
 | | |
 | --- | --- |
@@ -321,6 +321,8 @@ const session = new LiveSession({ root: '/path/to/worktree', baseRef: 'origin/ma
 The directory is created when missing and holds `base-<commit>.json` instead of `<root>/.dyffle/`; everything else stays in `.dyffle/`. The output is what a session building its own base would produce. A session whose root is a subfolder of the repository, or that sets `tsconfig`, `include` or `exclude`, gets an index of its own, `base-<commit>-<hash>.json`: the hash covers the subfolder, the tsconfig's path relative to the root, and both glob lists as written, so worktrees with the same options share a file. Sessions and processes can build the same commit at once: files appear whole and the last one wins, so at worst a commit is indexed twice. A file that can't be read, or that another dyffle version wrote, is rebuilt and replaced. Failing to write the file logs a warning and the session carries on.
 
 One thing the cache can't tell apart is `node_modules`: packages resolve from the worktree that builds the index. A worktree without its dependencies installed can build a poorer index, and the others then read it too, so install before starting the first session on a commit. Nothing removes old files from the directory.
+
+A linked worktree's ref outlives `git worktree remove`, and keeps that worktree's last live tree in the repository until it is deleted. `removeWorktreeRefs(root, id)` deletes it: `root` is any other worktree of the repository and `id` the removed one's `worktreeId(dir)`, taken before you remove it. It throws while git still has a worktree with that id. A new worktree that gets the same id takes the ref over anyway.
 
 ## JSON format
 

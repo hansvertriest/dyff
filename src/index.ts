@@ -2,6 +2,7 @@ export * from './schema.js';
 export { Analyzer, DEFAULT_EXCLUDE, DEFAULT_INCLUDE, type ProjectOptions } from './analyzer.js';
 export { parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './diff.js';
 export { finalize, moduleAssigner } from './finalize.js';
+export { removeWorktreeRefs, worktreeId } from './git.js';
 export { buildBaseIndex, buildOverlay, type OverlayOptions } from './indexer.js';
 export { fileEdges, findCycles, merge, moduleEdges, rebase, type MergeOptions } from './merge.js';
 export { query, queryMarkdown, type BranchSummary, type FileImpact, type NodeImpact, type QueryCandidate, type QueryOptions, type QueryResult } from './query.js';

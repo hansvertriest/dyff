@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { Analyzer, type ProjectOptions } from './analyzer.js';
 import { buildBaseIndex, buildOverlay, TOOL_VERSION, type Logger, type OverlayOptions } from './indexer.js';
-import { branchCommits, diffBetween, extractCommit, git, headCommit, mergeBase, showFile, worktreeTree, type BranchCommit } from './git.js';
+import { branchCommits, diffBetween, extractCommit, git, headCommit, liveRef, mergeBase, showFile, updateRef, worktreeTree, type BranchCommit } from './git.js';
 import { merge, rebase } from './merge.js';
 import { isReviewKey, readReviewInput, ReviewStore, type Review } from './reviews.js';
 import { SCHEMA_VERSION, type Index } from './schema.js';
@@ -107,7 +107,8 @@ export class LiveSession implements LiveSource {
     for (const d of ['commits', 'reviews']) mkdirSync(join(this.dir, d), { recursive: true });
     // Keeps .dyffle out of git status and out of the working tree's dyffles.
     writeFileSync(join(this.dir, '.gitignore'), '*\n');
-    this.update();
+    // Git may have collected anything while no session was running, so look at the whole tree once.
+    this.update(this.workingTree(true));
     this.loop = this.run();
   }
 
@@ -171,7 +172,8 @@ export class LiveSession implements LiveSource {
       files = c.files ??= sourceFiles(JSON.parse(readFileSync(this.commitFile(c.sha), 'utf8')) as Index);
     }
     if (!object || !files?.has(path)) return undefined;
-    const text = showFile(this.root, object, path);
+    let text = showFile(this.root, object, path);
+    if (text === undefined && object === this.live?.tree && this.restoreLive(object)) text = showFile(this.root, object, path);
     return text === undefined ? undefined : JSON.stringify({ key, path, text });
   }
 
@@ -236,7 +238,7 @@ export class LiveSession implements LiveSource {
   /** Rebuild what changed: the commits when HEAD or the merge base moved, the live dyffles when the working tree did too. */
   async tick(): Promise<void> {
     const moved = this.base?.commit !== mergeBase(this.root, this.opts.baseRef) || this.head?.commit !== headCommit(this.root);
-    const tree = worktreeTree(this.root);
+    const tree = this.workingTree();
     if (moved || tree !== this.live?.tree) await this.busy('branch', () => this.update(tree));
   }
 
@@ -252,7 +254,7 @@ export class LiveSession implements LiveSource {
   }
 
   /** Bring every dyffle up to date with the merge base, HEAD and the working tree, and tell the viewers which changed. */
-  private update(tree = worktreeTree(this.root)): void {
+  private update(tree = this.workingTree()): void {
     const changed: string[] = [];
     const baseMoved = this.ensureBase();
     const head = headCommit(this.root) ?? this.base!.commit;
@@ -380,6 +382,35 @@ export class LiveSession implements LiveSource {
     return merge(parentIndex, overlay, { depth: this.opts.depth });
   }
 
+  /**
+   * Keep the live tree from git gc: no commit refers to uncommitted work. The ref names the tree
+   * itself, as a commit for every rebuild would only add to `git log --all`.
+   */
+  private keepLive(tree: string): void {
+    updateRef(this.root, liveRef(this.root), tree);
+  }
+
+  /** The working tree as a git tree, repairing what git gc took. A repair that gives the live tree needs no rebuild, only the ref. */
+  private workingTree(deep = false): string {
+    let repaired = false;
+    const onRepair = () => {
+      repaired = true;
+      this.log('Rebuilding the git index of the live dyffles: git gc removed objects it names');
+    };
+    const tree = worktreeTree(this.root, { deep, onRepair });
+    if (repaired && tree === this.live?.tree) this.keepLive(tree);
+    return tree;
+  }
+
+  /** After reading a file of the live tree failed: whether the objects of that tree are back, which takes the working tree still being that tree. */
+  private restoreLive(tree: string): boolean {
+    try {
+      return this.workingTree(true) === tree;
+    } catch {
+      return false;
+    }
+  }
+
   /** Run `work` on a copy of a commit's files, with the project's options pointed at the copy; the result's root is the project's. */
   private inCommit<T extends Index>(commit: string, work: (project: ProjectOptions) => T): T {
     const tmp = mkdtempSync(join(tmpdir(), 'dyffle-commit-'));
@@ -416,6 +447,7 @@ export class LiveSession implements LiveSource {
     const parsed = JSON.parse(uncommitted.json) as Index;
     parsed.pr!.title = UNCOMMITTED_TITLE;
     uncommitted.json = JSON.stringify(parsed);
+    this.keepLive(tree);
     this.live = { tree, branch, uncommitted };
     writeFile(join(this.dir, 'live.json'), branch.json);
     this.log(`Branch dyffle updated: ${branch.stats.files} files changed, ${uncommitted.stats.files} uncommitted (${Date.now() - started} ms)`);
