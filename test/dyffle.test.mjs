@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, readPostInput, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
+import { buildBaseIndex, buildOverlay, embedSection, LiveSession, markdownReport, merge, mermaidModuleMap, parseUnifiedDiff, readReviewInput, rebase, reverseApply, reviewsMarkdown, serve, sliceHunks, standaloneHtml } from '../dist/index.js';
 
 const fixture = fileURLToPath(new URL('./fixtures/nest-app/', import.meta.url));
 const vueFixture = fileURLToPath(new URL('./fixtures/vue-app/', import.meta.url));
@@ -479,8 +479,10 @@ describe('rebase', () => {
 
 describe('dyffle watch', () => {
   let dir, session;
-  const inbox = (name, body) => writeFileSync(join(dir, '.dyffle/inbox', name), typeof body === 'string' ? body : JSON.stringify(body));
-  const feed = () => JSON.parse(session.feed());
+  const views = () => JSON.parse(session.views()).views;
+  const at = (key) => JSON.parse(session.index(views().find((v) => v.key === key).index));
+  const head = () => git(dir, 'rev-parse', 'HEAD').trim();
+  let first, second;
 
   before(async () => {
     dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
@@ -489,8 +491,10 @@ describe('dyffle watch', () => {
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'base');
     git(dir, 'checkout', '-qb', 'feature');
-    // Already on the branch before watch starts: part of the branch dyffle, not of any post.
     appendFileSync(join(dir, 'src/main.ts'), '\nexport const early = 1;\n');
+    git(dir, 'commit', '-qam', 'Early change');
+    first = head();
+    // Untracked: part of the branch and of the uncommitted changes.
     writeFileSync(join(dir, 'src/extra.ts'), 'export const extra = 2;\n');
     session = new LiveSession({ root: dir, baseRef: 'main', interval: 50 });
     await session.start();
@@ -498,89 +502,82 @@ describe('dyffle watch', () => {
   });
   after(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('starts with a dyffle of the whole branch, untracked files included', async () => {
+  it('keeps a dyffle of the whole branch, of each commit and of the uncommitted changes', async () => {
     await session.tick();
-    const live = JSON.parse(session.index(0));
-    assert.deepEqual(live.pr.changedFiles.sort(), ['src/extra.ts', 'src/main.ts']);
-    assert.deepEqual(session.labels(), ['Branch (live)']);
+    assert.deepEqual(session.labels(), ['Branch (live)', `${first.slice(0, 7)} Early change`, 'Uncommitted']);
+    assert.deepEqual(views().map((v) => [v.key, v.kind, v.index]), [['live', 'branch', 0], [`commit-${first}`, 'commit', 1], ['uncommitted', 'uncommitted', 2]]);
+    assert.deepEqual(at('live').pr.changedFiles.sort(), ['src/extra.ts', 'src/main.ts']);
+    const commit = at(`commit-${first}`);
+    assert.deepEqual(commit.pr.changedFiles, ['src/main.ts']);
+    assert.equal(commit.pr.title, 'Early change');
+    assert.equal(commit.pr.headCommit, first);
+    assert.equal(commit.root, dir);
+    assert.ok(commit.nodes.some((n) => n.id === 'src/main.ts#early' && n.change?.status === 'added'));
+    const uncommitted = at('uncommitted');
+    assert.deepEqual(uncommitted.pr.changedFiles, ['src/extra.ts']);
+    assert.equal(uncommitted.pr.baseCommit, first);
+    assert.equal(views()[1].author, 'dyffle');
+    assert.deepEqual(views()[1].stats, { files: 1, additions: 2, deletions: 0, symbols: 1 });
+    assert.ok(existsSync(join(dir, `.dyffle/commits/${first}.json`)));
     assert.ok(!git(dir, 'status', '--porcelain').includes('.dyffle'));
     assert.equal(git(dir, 'diff', '--cached', '--name-only'), '');
   });
 
-  it('rebuilds the branch dyffle when a file changes', async () => {
+  it('rebuilds the branch and uncommitted dyffles when a file changes', async () => {
     const before = session.index(0);
     await session.tick();
     assert.equal(session.index(0), before);
     const file = join(dir, 'src/orders/orders.service.ts'), text = readFileSync(file, 'utf8');
     appendFileSync(file, '\nexport function helper() {}\n');
     await session.tick();
-    const live = JSON.parse(session.index(0));
-    assert.ok(live.nodes.some((n) => n.id === 'src/orders/orders.service.ts#helper' && n.change?.status === 'added'));
+    for (const key of ['live', 'uncommitted'])
+      assert.ok(at(key).nodes.some((n) => n.id === 'src/orders/orders.service.ts#helper' && n.change?.status === 'added'), key);
     writeFileSync(file, text);
     await session.tick();
-    assert.ok(!JSON.parse(session.index(0)).pr.changedFiles.includes('src/orders/orders.service.ts'));
+    assert.ok(!at('uncommitted').pr.changedFiles.includes('src/orders/orders.service.ts'));
   });
 
-  it('posts a message without a change', async () => {
-    inbox('a.json', { message: 'Just a **question**' });
-    await session.tick();
-    const [p] = feed().posts;
-    assert.equal(p.id, 1);
-    assert.equal(p.author, 'claude');
-    assert.equal(p.dyffle, undefined);
-    assert.equal(p.index, undefined);
-    assert.equal(readdirSync(join(dir, '.dyffle/inbox')).length, 0);
-    assert.ok(existsSync(join(dir, '.dyffle/posts/0001.json')));
-  });
-
-  it('attaches what changed since watch started, then since the previous post', async () => {
+  it('adds a dyffle for a new commit, built from the commit and not the working tree', async () => {
     cpSync(join(fixture, 'pr/src/auth'), join(dir, 'src/auth'), { recursive: true });
-    inbox('b.json', { title: 'Auth', message: 'Added auth', change: true });
-    await session.tick();
-    const p2 = feed().posts[1];
-    assert.equal(p2.index, 1);
-    const d2 = JSON.parse(session.index(1));
-    assert.equal(d2.pr.title, 'Auth');
-    assert.equal(d2.pr.headCommit, p2.snapshot);
-    // Not main.ts or extra.ts: those changed before.
-    assert.ok(d2.pr.changedFiles.every((f) => f.startsWith('src/auth/')), d2.pr.changedFiles.join());
-    assert.equal(git(dir, 'rev-parse', 'refs/dyffle/posts/2').trim(), p2.snapshot);
-
+    git(dir, 'add', 'src/auth');
+    git(dir, 'commit', '-qm', 'Add auth');
+    second = head();
+    // Saved after the commit: uncommitted, so not in the commit's dyffle.
     cpSync(join(fixture, 'pr/src/users/users.service.ts'), join(dir, 'src/users/users.service.ts'));
-    inbox('c.json', { message: 'Users', change: true });
     await session.tick();
-    const p3 = feed().posts[2];
-    assert.equal(p3.from, p2.snapshot);
-    assert.deepEqual(JSON.parse(session.index(2)).pr.changedFiles, ['src/users/users.service.ts']);
-    assert.deepEqual(session.labels(), ['Branch (live)', '#2 Auth', '#3 Users']);
-    // The branch dyffle follows along.
-    assert.ok(JSON.parse(session.index(0)).pr.changedFiles.includes('src/users/users.service.ts'));
-
-    inbox('d.json', { message: 'Again', change: true });
-    await session.tick();
-    assert.equal(feed().posts[3].note, 'Nothing changed since the previous post.');
+    assert.deepEqual(session.labels().slice(1), [`${first.slice(0, 7)} Early change`, `${second.slice(0, 7)} Add auth`, 'Uncommitted']);
+    const commit = at(`commit-${second}`);
+    assert.ok(commit.pr.changedFiles.every((f) => f.startsWith('src/auth/')), commit.pr.changedFiles.join());
+    assert.equal(commit.pr.baseCommit, first);
+    assert.ok(commit.nodes.some((n) => n.id === 'src/auth/auth.service.ts#AuthService' && n.change?.status === 'added'));
+    assert.deepEqual(at('uncommitted').pr.changedFiles.sort(), ['src/extra.ts', 'src/users/users.service.ts']);
+    assert.ok(at('live').pr.changedFiles.includes('src/auth/auth.service.ts'));
   });
 
-  it('rejects invalid posts with an .error file', async () => {
-    inbox('bad.json', { message: '' });
+  it('drops the dyffle of a commit that left the branch', async () => {
+    git(dir, 'commit', '-q', '--amend', '-m', 'Add auth module');
+    const amended = head();
     await session.tick();
-    assert.match(readFileSync(join(dir, '.dyffle/inbox/bad.error'), 'utf8'), /message/);
-    assert.throws(() => readPostInput({ message: 'x', change: 'yes' }), /change/);
+    assert.deepEqual(views().map((v) => v.key), ['live', `commit-${first}`, `commit-${amended}`, 'uncommitted']);
+    assert.equal(views()[2].title, 'Add auth module');
+    assert.ok(!existsSync(join(dir, `.dyffle/commits/${second}.json`)));
+    second = amended;
   });
 
-  it('serves the feed and streams changes', async () => {
+  it('serves the views and streams changes', async () => {
     const { server, url } = await serve(session, { port: 0 });
     try {
-      assert.equal((await (await fetch(url + 'feed.json')).json()).posts.length, 4);
+      assert.deepEqual((await (await fetch(url + 'views.json')).json()).views.map((v) => v.key), views().map((v) => v.key));
       assert.deepEqual(await (await fetch(url + 'indexes.json')).json(), session.labels());
+      assert.equal((await fetch(url + 'feed.json')).status, 404);
       const res = await fetch(url + 'events');
       const reader = res.body.getReader();
       await reader.read();
-      inbox('e.json', { message: 'Hello' });
+      writeFileSync(join(dir, 'src/late.ts'), 'export const late = 3;\n');
       await session.tick();
       let text = '';
-      while (!text.includes('event: feed')) text += new TextDecoder().decode((await reader.read()).value);
-      assert.match(text, /event: feed\ndata: \{"id":5\}/);
+      while (!text.includes('event: views')) text += new TextDecoder().decode((await reader.read()).value);
+      assert.match(text, /event: views\ndata: \{"changed":\["live","uncommitted"\]\}/);
       await reader.cancel();
     } finally {
       server.closeAllConnections();
@@ -588,29 +585,30 @@ describe('dyffle watch', () => {
     }
   });
 
-  it('keeps reviews of the live branch and of posts, and lists them as Markdown', async () => {
+  it('keeps reviews of the branch, the commits and the uncommitted changes, and lists them as Markdown', async () => {
     const { server, url } = await serve(session, { port: 0 });
+    const key = `commit-${second}`;
     try {
-      assert.deepEqual(await (await fetch(url + 'review.json?key=post-2')).json(), { key: 'post-2', body: '', comments: [], viewed: {} });
+      assert.deepEqual(await (await fetch(url + `review.json?key=${key}`)).json(), { key, body: '', comments: [], viewed: {} });
       assert.equal((await fetch(url + 'review.json?key=../x')).status, 404);
+      assert.equal((await fetch(url + 'review.json?key=post-2')).status, 404);
       const events = await fetch(url + 'events');
       const reader = events.body.getReader();
       await reader.read();
       const comment = { id: 'a', path: 'src/auth/auth.service.ts', line: 1, side: 'RIGHT', body: 'Why?', code: 'import x;', symbol: 'src/auth/auth.service.ts#AuthService', created: 1 };
-      const put = await fetch(url + 'review.json?key=post-2&client=me', { method: 'PUT', body: JSON.stringify({ body: 'Looks good', comments: [comment], viewed: { 'src/auth/auth.service.ts': 'h1' } }) });
+      const put = await fetch(url + `review.json?key=${key}&client=me`, { method: 'PUT', body: JSON.stringify({ body: 'Looks good', comments: [comment], viewed: { 'src/auth/auth.service.ts': 'h1' } }) });
       assert.equal(put.status, 204);
       let text = '';
       while (!text.includes('event: review')) text += new TextDecoder().decode((await reader.read()).value);
-      assert.match(text, /"key":"post-2","client":"me","comments":1/);
+      assert.ok(text.includes(`"key":"${key}","client":"me","comments":1`));
       await reader.cancel();
-      const stored = JSON.parse(readFileSync(join(dir, '.dyffle/reviews/post-2.json'), 'utf8'));
-      assert.equal(stored.post, 2);
-      assert.equal(stored.title, 'Auth');
-      assert.equal(stored.headCommit, feed().posts[1].snapshot);
+      const stored = JSON.parse(readFileSync(join(dir, `.dyffle/reviews/${key}.json`), 'utf8'));
+      assert.equal(stored.title, 'Add auth module');
+      assert.equal(stored.headCommit, second);
       assert.deepEqual(stored.viewed, { 'src/auth/auth.service.ts': 'h1' });
-      assert.equal(feed().posts[1].comments, 1);
-      // A message-only post has no review, and bad input is refused.
-      assert.equal((await fetch(url + 'review.json?key=post-1', { method: 'PUT', body: JSON.stringify({ body: '', comments: [] }) })).status, 400);
+      assert.equal(views().find((v) => v.key === key).comments, 1);
+      // A commit that is not on the branch has no review, and bad input is refused.
+      assert.equal((await fetch(url + `review.json?key=commit-${'0'.repeat(40)}`, { method: 'PUT', body: JSON.stringify({ body: '', comments: [] }) })).status, 400);
       assert.equal((await fetch(url + 'review.json?key=live', { method: 'PUT', body: '{"body":1}' })).status, 400);
       assert.throws(() => readReviewInput({ body: '', comments: [{ id: 'x', path: 'a', line: 1, side: 'UP', body: '' }] }), /side/);
 
@@ -619,11 +617,14 @@ describe('dyffle watch', () => {
         { id: 'b', path: 'src/main.ts', line: 1, side: 'RIGHT', body: 'Still here', code: main[0], created: 2 },
         { id: 'c', path: 'src/main.ts', line: 2, side: 'RIGHT', body: 'Was here', code: 'something else', created: 3 },
       ], viewed: {} }));
+      session.saveReview('uncommitted', JSON.stringify({ body: 'Commit this', comments: [], viewed: {} }));
+      assert.equal(JSON.parse(readFileSync(join(dir, '.dyffle/reviews/uncommitted.json'), 'utf8')).title, 'Uncommitted changes');
       const md = reviewsMarkdown(dir);
-      assert.match(md, /## Post #2: Auth\n\nLooks good\n\n- \*\*src\/auth\/auth\.service\.ts:1 in `AuthService`\*\*\n/);
-      assert.match(md, /## Whole branch \(live\)/);
+      assert.ok(md.includes(`## Commit ${second.slice(0, 7)}: Add auth module\n\nLooks good\n\n- **src/auth/auth.service.ts:1 in \`AuthService\`**\n`), md);
       assert.match(md, /src\/main\.ts:1\*\*\n/);
       assert.match(md, /src\/main\.ts:2\*\* \(outdated: the line changed since\)/);
+      // The order of the picker: the whole branch, the commits, then the uncommitted changes.
+      assert.deepEqual(md.match(/^## .*/gm).map((h) => h.split(':')[0]), ['## Whole branch (live)', `## Commit ${second.slice(0, 7)}`, '## Uncommitted changes']);
     } finally {
       server.closeAllConnections();
       server.close();
@@ -631,21 +632,24 @@ describe('dyffle watch', () => {
   });
 
   it('serves files as the dyffle they are in shows them', async () => {
-    const p2 = feed().posts[1];
-    const atPost = git(dir, 'show', `${p2.snapshot}:src/auth/auth.service.ts`);
-    assert.equal(JSON.parse(session.source('post-2', 'src/auth/auth.service.ts')).text, atPost);
-    // The live branch serves its own tree: an edit since the last rebuild doesn't show yet.
+    const key = `commit-${second}`;
+    const atCommit = git(dir, 'show', `${second}:src/auth/auth.service.ts`);
+    appendFileSync(join(dir, 'src/auth/auth.service.ts'), '\n// after the commit\n');
+    await session.tick();
+    assert.equal(JSON.parse(session.source(key, 'src/auth/auth.service.ts')).text, atCommit);
+    assert.ok(JSON.parse(session.source('uncommitted', 'src/auth/auth.service.ts')).text.includes('after the commit'));
+    // The live dyffles serve their own tree: an edit since the last rebuild doesn't show yet.
     const file = join(dir, 'src/users/users.service.ts'), text = readFileSync(file, 'utf8');
     appendFileSync(file, '\n// not yet\n');
     assert.equal(JSON.parse(session.source('live', 'src/users/users.service.ts')).text, text);
     writeFileSync(file, text);
-    // Unchanged files too, but nothing outside the dyffle, and no unknown or message-only posts.
+    // Unchanged files too, but nothing outside the dyffle, and no unknown commits.
     assert.ok(JSON.parse(session.source('live', 'src/main.ts')).text.includes('bootstrap'));
-    for (const [key, path] of [['live', '../outside.ts'], ['live', '.dyffle/state.json'], ['live', 'tsconfig.json'], ['post-1', 'src/main.ts'], ['post-99', 'src/main.ts'], ['x', 'src/main.ts']])
-      assert.equal(session.source(key, path), undefined, `${key} ${path}`);
+    for (const [k, path] of [['live', '../outside.ts'], ['live', '.dyffle/views.json'], ['live', 'tsconfig.json'], [`commit-${'0'.repeat(40)}`, 'src/main.ts'], ['x', 'src/main.ts']])
+      assert.equal(session.source(k, path), undefined, `${k} ${path}`);
     const { server, url } = await serve(session, { port: 0 });
     try {
-      assert.equal((await (await fetch(url + 'source.json?key=post-2&path=src/auth/auth.service.ts')).json()).text, atPost);
+      assert.equal((await (await fetch(url + `source.json?key=${key}&path=src/auth/auth.service.ts`)).json()).text, atCommit);
       assert.equal((await fetch(url + 'source.json?key=live&path=../x')).status, 404);
     } finally {
       server.closeAllConnections();
@@ -653,11 +657,18 @@ describe('dyffle watch', () => {
     }
   });
 
-  it('picks up posts and state again after a restart', async () => {
-    const again = new LiveSession({ root: dir, baseRef: 'main' });
+  it('picks up the commits from its cache after a restart', async () => {
+    const logs = [];
+    const again = new LiveSession({ root: dir, baseRef: 'main', log: (m) => logs.push(m) });
     await again.start();
     await again.stop();
-    assert.equal(JSON.parse(again.feed()).posts.length, 5);
-    assert.equal(again.labels().length, 3);
+    assert.deepEqual(again.labels(), session.labels());
+    assert.equal(again.index(2), session.index(2));
+    assert.ok(!logs.some((m) => m.startsWith('Commit ') || m.startsWith('Indexing')), logs.join('\n'));
+  });
+
+  it('no longer takes posts', () => {
+    const cli = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+    assert.throws(() => execFileSync(process.execPath, [cli, 'post', '-m', 'hi'], { cwd: dir, stdio: 'pipe' }), (e) => /"dyffle post" was removed/.test(e.stderr.toString()));
   });
 });

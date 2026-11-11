@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildBaseIndex, buildOverlay } from './indexer.js';
-import { LiveSession, readPostInput, reviewsMarkdown, type Post } from './live.js';
+import { LiveSession } from './live.js';
 import { merge } from './merge.js';
 import { embedSection, markdownReport } from './report.js';
+import { reviewsMarkdown } from './reviews.js';
 import { serve, standaloneHtml } from './serve.js';
 import type { Index } from './schema.js';
 
@@ -20,7 +21,6 @@ Usage
   dyffle html    <merged.json>... [-o pr-map.html]
   dyffle serve   <merged.json>... [--port 4173] [--host 127.0.0.1]
   dyffle watch   --base-ref <ref> [project options] [--port 4173] [--host 127.0.0.1]
-  dyffle post    (-m <markdown> | --message-file <file|->) [--title <text>] [--change] [--root <dir>]
   dyffle comments [--root <dir>]
 
 Commands
@@ -43,25 +43,13 @@ Commands
             html and serve take several merged indexes too, e.g. one per
             commit, and the page switches between them. Each is listed
             under its file name.
-  watch     Run next to a project: serve a dyffle of the whole branch that
-            follows every saved file, and a feed of posts. A post is a
-            Markdown message, optionally with a dyffle of what changed since
-            the previous post. Everything is kept in <root>/.dyffle.
-  post      Post to the feed of a running dyffle watch and wait until it is
-            in. --change attaches what changed since the previous post.
-            The same as writing {"title", "message", "change"} to
-            .dyffle/inbox/<name>.json.
-  comments  The review comments made in dyffle watch, as Markdown: per post
-            and for the live branch, each with its file, line and code.
-            They are stored in .dyffle/reviews/<key>.json.
-
-Post options
-  -m, --message <md>      The post, in Markdown
-  --message-file <file|-> Read the post from a file, or - for stdin
-  --title <text>          A short title (default: the first line)
-  --change                Attach a dyffle of the change since the previous post
-  --author <name>         Default: claude
-  --queue                 Don't wait for dyffle watch to take the post in
+  watch     Run next to a project and keep its dyffles up to date: the
+            whole branch, one per commit on the branch, and the uncommitted
+            changes. Everything is kept in <root>/.dyffle.
+  comments  The review comments made in dyffle watch, as Markdown: for the
+            whole branch, per commit and for the uncommitted changes, each
+            with its file, line and code. They are stored in
+            .dyffle/reviews/<key>.json.
 
 Project options
   --root <dir>        Directory node ids are relative to (default: cwd)
@@ -83,6 +71,8 @@ Output
 `;
 
 async function main(argv: string[]): Promise<void> {
+  // Before parsing, so its old options don't hide why it fails.
+  if (argv[0] === 'post') throw new Error(POST_REMOVED);
   const { values: v, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -101,12 +91,6 @@ async function main(argv: string[]): Promise<void> {
       link: { type: 'string' },
       'embed-in': { type: 'string' },
       port: { type: 'string' },
-      message: { type: 'string', short: 'm' },
-      'message-file': { type: 'string' },
-      title: { type: 'string' },
-      change: { type: 'boolean' },
-      author: { type: 'string' },
-      queue: { type: 'boolean' },
       host: { type: 'string' },
       out: { type: 'string', short: 'o' },
       pretty: { type: 'boolean' },
@@ -198,9 +182,6 @@ async function main(argv: string[]): Promise<void> {
       process.on('SIGTERM', quit);
       break;
     }
-    case 'post':
-      await post(v, log);
-      break;
     case 'comments':
       write(reviewsMarkdown(v.root ?? process.cwd()) || 'No review comments yet.\n');
       break;
@@ -225,60 +206,7 @@ async function main(argv: string[]): Promise<void> {
 
 class UsageError extends Error {}
 
-interface PostArgs {
-  root?: string;
-  message?: string;
-  'message-file'?: string;
-  title?: string;
-  change?: boolean;
-  author?: string;
-  queue?: boolean;
-}
-
-/** Write a post to the inbox of dyffle watch and wait until it is a post (or rejected). */
-async function post(v: PostArgs, log?: (m: string) => void): Promise<void> {
-  const message = v.message ?? (v['message-file'] !== undefined ? readFileSync(v['message-file'] === '-' ? 0 : v['message-file'], 'utf8') : undefined);
-  if (message === undefined) throw new UsageError('Pass -m <markdown> or --message-file <file|->.');
-  const input = readPostInput({ message, title: v.title, author: v.author, change: v.change });
-  const dir = join(resolve(v.root ?? process.cwd()), '.dyffle');
-  const server = (() => {
-    try {
-      const s = JSON.parse(readFileSync(join(dir, 'server.json'), 'utf8')) as { pid: number; url: string };
-      process.kill(s.pid, 0);
-      return s;
-    } catch {
-      return undefined;
-    }
-  })();
-  if (!server && !v.queue) throw new Error(`dyffle watch is not running in ${resolve(dir, '..')}. Start it with "dyffle watch --base-ref origin/main", or pass --queue.`);
-  const name = `${Date.now()}-${process.pid}.json`;
-  const file = join(dir, 'inbox', name);
-  if (!existsSync(join(dir, 'inbox'))) throw new Error(`No ${join(dir, 'inbox')}; run "dyffle watch" in this project first.`);
-  writeFileSync(file + '.tmp', JSON.stringify(input, null, 2) + '\n');
-  renameSync(file + '.tmp', file);
-  if (v.queue) {
-    log?.(`Queued ${file}`);
-    return;
-  }
-  const error = file.replace(/\.json$/, '.error');
-  for (const until = Date.now() + 10 * 60_000; Date.now() < until; await new Promise((r) => setTimeout(r, 200))) {
-    if (existsSync(error)) {
-      const why = readFileSync(error, 'utf8').trim();
-      unlinkSync(error);
-      throw new Error(`The post was rejected: ${why}`);
-    }
-    if (existsSync(file)) continue;
-    const posts = join(dir, 'posts');
-    for (const f of readdirSync(posts).filter((x) => /^\d+\.json$/.test(x))) {
-      const p = JSON.parse(readFileSync(join(posts, f), 'utf8')) as Post;
-      if (p.source !== name) continue;
-      const what = p.stats ? `, ${p.stats.files} files +${p.stats.additions} −${p.stats.deletions}` : p.note ? ` (${p.note})` : '';
-      process.stdout.write(`Posted #${p.id}${what}: ${server!.url}\n`);
-      return;
-    }
-  }
-  throw new Error(`dyffle watch did not take ${file} in within 10 minutes.`);
-}
+const POST_REMOVED = '"dyffle post" was removed: dyffle watch now keeps a dyffle of every commit on the branch and of the uncommitted changes. Commit your work instead of posting it.';
 
 main(process.argv.slice(2)).catch((e) => {
   const err = e as Error & { code?: string };

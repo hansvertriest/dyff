@@ -19,16 +19,16 @@ export function standaloneHtml(index: unknown | LabeledIndex[]): string {
   return html.slice(0, at) + `<script>${data}</script>\n` + html.slice(at);
 }
 
-/** Indexes and a feed that change while the server runs (dyffle watch). */
+/** Indexes that change while the server runs (dyffle watch), with a review of each. */
 export interface LiveSource {
   labels(): string[];
   /** One merged index as JSON, by its position in labels(). */
   index(i: number): string | undefined;
-  /** The feed as JSON. */
-  feed(): string;
-  /** A file's text as JSON, as the live branch ("live") or a post ("post-<id>") shows it; undefined when it isn't in that dyffle. */
+  /** What each index is, as JSON: `{ views: [{ key, kind, index, title, stats, comments, ... }] }`. */
+  views(): string;
+  /** A file's text as JSON, as the dyffle with this key (`live`, `uncommitted`, `commit-<sha>`) shows it; undefined when it isn't in that dyffle. */
   source(key: string, path: string): string | undefined;
-  /** The review of the live branch ("live") or of a post ("post-<id>") as JSON, or undefined for an unknown key. */
+  /** The review of the dyffle with this key as JSON, or undefined for an unknown key. */
   review(key: string): string | undefined;
   /** Store a review sent by a viewer; `client` identifies the page, so it can skip its own change. */
   saveReview(key: string, json: string, client?: string): void;
@@ -63,7 +63,7 @@ const isLive = (x: unknown): x is LiveSource => typeof x === 'object' && x !== n
 /**
  * Serve the viewer page and a merged index on http://host:port/. With several
  * indexes, /indexes.json lists their labels and /index.json?i=N serves one.
- * A live source also serves /feed.json and /events, a stream of changes.
+ * A live source also serves /views.json, /source.json, /review.json and /events, a stream of changes.
  */
 export function serve(indexJson: string | LabeledIndex<string>[] | LiveSource, opts: ServeOptions = {}): Promise<{ server: Server; url: string }> {
   const host = opts.host ?? '127.0.0.1';
@@ -102,8 +102,8 @@ export function serve(indexJson: string | LabeledIndex<string>[] | LiveSource, o
         });
     } else if (found !== undefined) {
       json(found);
-    } else if (live && url.pathname === '/feed.json') {
-      json(live.feed());
+    } else if (live && url.pathname === '/views.json') {
+      json(live.views());
     } else if (live && url.pathname === '/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(': dyffle\n\n');

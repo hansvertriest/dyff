@@ -125,50 +125,38 @@ Run dyffle next to a project while you (or Claude Code) work on it:
 dyffle watch --base-ref origin/main
 ```
 
-It serves the viewer on http://127.0.0.1:4173 with two things in it:
+It serves the viewer on http://127.0.0.1:4173 and keeps three kinds of dyffle up to date. The commit picker (← → and a list) and the **Changes** panel switch between them:
 
-- **The whole branch, live.** A dyffle of the branch against its merge base with `--base-ref`, rebuilt whenever a file changes. Uncommitted and untracked files are included; ignored ones are not. The page updates on its own (unless you are writing a review comment: then it offers the update).
-- **A feed of posts.** A post is a Markdown message, optionally with a dyffle of what changed since the previous post that had one. Opening a post's change shows it on the map; ← → in the picker step through them. In a post, a symbol or file in backticks (`` `UsersService.findOne` ``, `` `src/users/users.service.ts` ``) links to it on the map.
+- **The whole branch, live.** The branch against its merge base with `--base-ref`, rebuilt whenever a file changes. Uncommitted and untracked files are included; ignored ones are not.
+- **One per commit.** Every commit on the branch since the merge base, oldest first, each against its parent. Only first parents are followed, so a merged-in branch shows as its merge commit. A commit is built once, from a copy of its files, and cached. When a commit leaves the branch (amend, rebase, reset), its dyffle goes too.
+- **Uncommitted.** The working tree against `HEAD`, untracked files included, rebuilt whenever a file changes.
 
-Post from the command line. `dyffle post` waits until the post is in and prints its number:
-
-```sh
-dyffle post --change --title "Add JWT guard" -m "Guards \`UsersController\`. The login route stays public."
-dyffle post -m "Should \`/users/legacy\` keep working? I left it alone for now."
-dyffle post --change --message-file notes.md
-```
-
-Or write a JSON file to `.dyffle/inbox/` (any name ending in `.json`). dyffle takes it in within a second and removes it, or replaces it with `<name>.error` when it is not a valid post:
-
-```json
-{ "title": "Add JWT guard", "message": "Markdown…", "change": true, "author": "claude" }
-```
-
-Only `message` is required. `change: true` takes a snapshot of the working tree and attaches what changed since the previous snapshot. The first one is taken when `watch` starts, so a post never includes what was already on the branch. Snapshots are commits kept under `refs/dyffle/` and are never on a branch, and the real git index is not touched. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
+The page updates on its own and stays on the dyffle it shows, also when a new commit appears. While you are writing a review comment it offers the update instead. Snapshots of the working tree are git trees written with a separate index file, so the real git index is not touched. Everything else lives in `.dyffle/` in the project, which ignores itself in git:
 
 | | |
 | --- | --- |
-| `.dyffle/inbox/` | Posts to take in |
-| `.dyffle/posts/0001.json` | A post: `id`, `title`, `message`, `author`, `createdAt`, and with a change `snapshot`, `from`, `stats` and `dyffle` (the file name of its merged index, `0001.dyffle.json`) |
 | `.dyffle/live.json` | The merged index of the whole branch, as it is now |
+| `.dyffle/commits/<sha>.json` | The merged index of one commit against its parent |
 | `.dyffle/base-<commit>.json` | The base index at the merge base, built once (from a copy of that commit, not the working tree) |
-| `.dyffle/reviews/<key>.json` | Your review of the live branch (`live`) or of a post (`post-<id>`), see below |
+| `.dyffle/reviews/<key>.json` | Your review of the whole branch (`live`), a commit (`commit-<sha>`) or the uncommitted changes (`uncommitted`), see below |
 | `.dyffle/server.json` | The URL and process of the running `watch` |
 
-A change you make between two posts is part of the next post with a change. Stop `watch` with Ctrl+C; posts are kept and the feed picks up where it left off next time. Delete `.dyffle/` to start over.
+Stop `watch` with Ctrl+C. Commit dyffles and reviews are kept, so a restart only builds what is new. Delete `.dyffle/` to start over.
 
-**Reviewing under `watch`.** Comments, the overall comment and viewed files are kept in `.dyffle/reviews/` instead of the browser: one review for the live branch and one per post with a change. Every open page shares them (your laptop and your phone, or `localhost` and a network address), and changes made on one page show on the others. The feed shows how many comments each change has.
+> **Posts are gone.** Earlier versions had a feed of posts (`dyffle post`, `.dyffle/inbox/`). Commits now mark the steps of the work, so `dyffle post` exits with an error. `watch` no longer reads `.dyffle/posts/`, `.dyffle/inbox/` or `.dyffle/state.json`, and you can delete them.
 
-**Whole files.** A changed file's sidebar has a **Diff | Whole file** switch. The whole file is the file with its diff laid over it: added lines marked, removed lines where they were. An unchanged file shows whole. A symbol's **Show in file** opens its file at the symbol. The text comes from the git tree the dyffle was built from, so it matches the map even when the working tree has moved on. Only files in that dyffle are served.
+**Reviewing under `watch`.** Comments, the overall comment and viewed files are kept in `.dyffle/reviews/` instead of the browser: one review per dyffle. Every open page shares them (your laptop and your phone, or `localhost` and a network address), and changes made on one page show on the others. The Changes panel shows how many comments each dyffle has.
+
+**Whole files.** A changed file's sidebar has a **Diff | Whole file** switch. The whole file is the file with its diff laid over it: added lines marked, removed lines where they were. An unchanged file shows whole. A symbol's **Show in file** opens its file at the symbol. The text comes from the git tree the dyffle was built from (the commit, or the working tree at the last rebuild), so it matches the map even when the working tree has moved on. Only files in that dyffle are served.
 
 Every line of a whole file takes comments. A comment on a line the diff doesn't show is marked **outside the diff**: GitHub won't take it on a PR, so **Copy comments** leaves it out of `comments` and lists it, with `outsideDiff: true`, in `dyffle.context` (which holds every comment).
 
-A comment on the live branch stays on its line while the code moves on. When the line no longer holds the code it was made on, the comment leaves the diff and is listed in the review as **outdated**, with the old code.
+A comment on the whole branch or on the uncommitted changes stays on its line while the code moves on. When the line no longer holds the code it was made on, the comment leaves the diff and is listed in the review as **outdated**, with the old code. A commit doesn't change, so its comments don't go outdated.
 
-`dyffle comments` prints every review as Markdown, for Claude to act on: the overall comment, then each comment with its file, line, symbol and code, with outdated ones and ones outside the diff marked:
+`dyffle comments` prints every review as Markdown, for Claude to act on, in the picker's order: the whole branch, the commits, then the uncommitted changes. Each has its overall comment, then each comment with its file, line, symbol and code, with outdated ones and ones outside the diff marked:
 
 ~~~md
-## Post #2: Add JWT guard
+## Commit 3f2a9c1: Add JWT guard
 
 - **src/users/users.controller.ts:14 in `UsersController.findOne`**
   ```
@@ -177,17 +165,15 @@ A comment on the live branch stays on its line while the code moves on. When the
   Shouldn't this one stay public?
 ~~~
 
-The files themselves are JSON (`key`, `post`, `title`, `headCommit`, `body`, `comments` with `path`/`line`/`side`/`body`/`code`/`symbol` and `outsideDiff`, and `viewed`: path → hash of the diff that was viewed).
+The files themselves are JSON (`key`, `title`, `headCommit`, `body`, `comments` with `path`/`line`/`side`/`body`/`code`/`symbol` and `outsideDiff`, and `viewed`: path → hash of the diff that was viewed).
 
-To have Claude Code post its work and read your review, add this to the project's `CLAUDE.md`:
+To have Claude Code work with it, add this to the project's `CLAUDE.md`:
 
 ```md
 ## dyffle
-`dyffle watch` runs next to this project and shows the user a review feed. Post to it with `npx dyffle post`:
-- After each coherent change (a feature step, a fix, a refactor), run `npx dyffle post --change --title "<short title>" -m "<markdown>"`: what you changed and why, and what to look at. Put symbols and files in backticks so they link to the map.
-- For a question, a plan or a status update without a change, leave out `--change`.
-- The user reviews in dyffle. Run `npx dyffle comments` before starting the next step and when the user mentions their review; address each comment, and say in your next post what you changed for which comment.
-- If it says watch is not running, carry on without posting.
+`dyffle watch` runs next to this project and shows the user a dyffle of the whole branch, of every commit and of the uncommitted changes.
+- Commit after each coherent change (a feature step, a fix, a refactor), with a message that says what changed and why: each commit gets its own dyffle for the user to review.
+- The user reviews in dyffle. Run `npx dyffle comments` before starting the next step and when the user mentions their review, and address each comment.
 ```
 
 ### In CI: a PR map in every PR description (GitHub Actions)

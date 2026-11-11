@@ -66,14 +66,26 @@ export function worktreeTree(cwd: string): string {
   return git(top, ['write-tree'], env).trim();
 }
 
-/** A commit of a tree on top of HEAD, kept from garbage collection under `ref` when given. */
-export function commitTree(cwd: string, tree: string, message: string, ref?: string): string {
-  const parent = headCommit(cwd);
-  // Snapshot commits never reach a branch; a fixed identity keeps them working without git config.
-  const who = { GIT_AUTHOR_NAME: 'dyffle', GIT_AUTHOR_EMAIL: 'dyffle@localhost', GIT_COMMITTER_NAME: 'dyffle', GIT_COMMITTER_EMAIL: 'dyffle@localhost' };
-  const sha = git(cwd, ['commit-tree', tree, ...(parent ? ['-p', parent] : []), '-m', message], who).trim();
-  if (ref) git(cwd, ['update-ref', ref, sha]);
-  return sha;
+/** A commit on the branch, with its first parent. */
+export interface BranchCommit {
+  sha: string;
+  parent: string;
+  author: string;
+  /** Author date, ISO 8601. */
+  date: string;
+  subject: string;
+}
+
+/** The commits after `from` up to HEAD, oldest first. Only first parents: a merged-in branch counts as its merge commit. */
+export function branchCommits(cwd: string, from: string): BranchCommit[] {
+  const out = git(cwd, ['log', '--first-parent', '--reverse', '--format=%H%x00%P%x00%an%x00%aI%x00%s', `${from}..HEAD`]);
+  return out
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [sha, parents, author, date, subject] = line.split('\0');
+      return { sha, parent: parents.split(' ')[0], author, date, subject };
+    });
 }
 
 /** Write the files of a commit (the whole repository) into `dir`; returns the path of `cwd` inside it. */

@@ -293,32 +293,18 @@ details.file>summary.fhead:hover{background:var(--line)}
 .dl.focus:not(.add):not(.del){background:var(--accent-soft)}
 .crow .ccode{display:block;margin:4px 0 0;padding:2px 6px;border-radius:4px;background:var(--surface-2);font-size:12px;white-space:pre-wrap;word-break:break-all;text-decoration:line-through;color:var(--muted)}
 
-/* dyffle watch: the feed of posts and the live branch. */
-.post{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:10px 14px;margin:0 0 12px}
-.post.on{border-color:var(--accent)}
-.phead{display:flex;gap:8px;align-items:baseline;font-size:12.5px;color:var(--muted)}
-.phead b{color:var(--ink);font-weight:600}
-.phead time{margin-left:auto}
-.post h4{margin:6px 0 2px;font-size:15px}
-.md{font-size:13.5px;overflow-wrap:anywhere}
-.md p,.md ul,.md ol,.md pre,.md blockquote{margin:6px 0}
-.md ul,.md ol{padding-left:20px}
-.md h5{font-size:14px;margin:12px 0 4px}
-.md pre{background:var(--surface-2);border-radius:6px;padding:8px 10px;overflow:auto;font:12.5px/1.45 var(--mono)}
-.md blockquote{border-left:3px solid var(--line);padding-left:10px;color:var(--muted)}
-.md hr{border:0;border-top:1px solid var(--line)}
-.md a{color:var(--accent)}
-.md .symref{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline dotted;text-underline-offset:3px}
-.postchg{display:flex;flex-wrap:wrap;width:100%;gap:4px 10px;align-items:center;margin:8px 0 0;padding:7px 10px;border:1px solid var(--stroke);border-radius:8px;background:var(--bg);font-size:13px;text-align:left}
-.postchg:hover{border-color:var(--accent)}
-.postchg .go{margin-left:auto;color:var(--accent);font-weight:500}
-.postchg.on{border-color:var(--accent);background:var(--accent-soft)}
-.postchg.on .go{color:var(--ink)}
-.feedlive{margin:0 0 16px}
-.feedlive .postchg{margin:0}
+/* dyffle watch: the changes list, one entry per dyffle it keeps. */
+.chgview{display:flex;flex-direction:column;gap:2px;width:100%;margin:0 0 8px;padding:8px 12px;border:1px solid var(--stroke);border-radius:8px;background:var(--surface);font-size:13px;text-align:left;color:var(--ink)}
+.chgview:hover{border-color:var(--accent)}
+.chgview.on{border-color:var(--accent);background:var(--accent-soft)}
+.chgview .t{display:flex;gap:10px;align-items:baseline}
+.chgview .t b{font-weight:600;overflow-wrap:anywhere}
+.chgview .go{margin-left:auto;color:var(--accent);font-weight:500;white-space:nowrap}
+.chgview.on .go{color:var(--ink)}
+.chgview .sub{font-size:12.5px;color:var(--muted)}
 .badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--surface);font-size:11.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
 .hbtn.on{border-color:var(--accent);color:var(--accent)}
-#feedBtn{display:inline-flex;align-items:center;gap:6px}
+#changesBtn{display:inline-flex;align-items:center;gap:6px}
 #liveStatus{border:0;background:none;padding:0;font-size:12.5px;color:var(--muted);white-space:nowrap}
 #liveStatus:not(:disabled){color:var(--accent);text-decoration:underline;text-underline-offset:3px}
 
@@ -392,7 +378,7 @@ details.file>summary.fhead:hover{background:var(--line)}
     <button class="iconbtn mobile-only" id="searchClose" type="button" aria-label="Close search"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
   </div>
   <button id="liveStatus" type="button" hidden disabled></button>
-  <button class="hbtn" id="feedBtn" type="button" hidden aria-label="Feed" title="Posts about the changes, newest first"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span class="lbl">Feed</span><span class="badge" hidden></span></button>
+  <button class="hbtn" id="changesBtn" type="button" hidden aria-label="Changes" title="The whole branch, each commit and the uncommitted changes"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span class="lbl">Changes</span><span class="badge" hidden></span></button>
   <button class="hbtn" id="copyReview" type="button" hidden title="Copy a GitHub pull request review as JSON, with each comment's line of code and symbol for context"><svg class="mobile-only" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M3 10.5V3.5A1 1 0 0 1 4 2.5h6.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg><span class="lbl">Copy comments</span></button>
   <button class="iconbtn mobile-only" id="searchBtn" type="button" aria-label="Search"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="7.5" cy="7.5" r="5" stroke="currentColor" stroke-width="1.7" fill="none"/><path d="M11.5 11.5L16 16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
 </header>
@@ -1076,7 +1062,7 @@ function renderSummary() {
   out.innerHTML = `
     <h2>${esc(title())}</h2>
     <p class="path">${esc(D.root)}</p>
-    ${feedPost(current) ? postHtml(feedPost(current), false) : ''}
+    ${viewAt(current)?.kind === 'commit' ? `<p class="path">${commitLine(viewAt(current))}</p>` : ''}
     <div class="stats">
       <div><b>${S.filesChanged}</b><span>files</span></div>
       <div><b><span class="n-a">+${S.additions}</span> <span class="n-d">−${S.deletions}</span></b><span>lines</span></div>
@@ -1109,14 +1095,14 @@ const stored = key => localStorage.getItem(key) ?? localStorage.getItem(key.repl
 // in this browser per head commit, so they survive reloads and a new `dyffle serve`.
 let review = { body: '', comments: [] };
 const reviewKey = () => 'dyffle-review:' + (D.pr?.headCommit || D.root);
-/** The review of what is on the map, under dyffle watch: the live branch or a post. */
-const remoteKey = () => feedPost(current) ? `post-${feedPost(current).id}` : 'live';
+/** The review of what is on the map, under dyffle watch: the whole branch, a commit or the uncommitted changes. */
+const remoteKey = () => viewAt(current)?.key ?? 'live';
 const clientId = Math.random().toString(36).slice(2, 10);
 let reviewLoads = 0, pending = null, saveTimer = null, saving = Promise.resolve(), shownKey = null;
 function loadReview() {
   // A rebuilt live branch keeps showing its review while the server's copy loads.
-  if (!feed || remoteKey() !== shownKey) { review = { body: '', comments: [] }; viewed = new Map(); }
-  if (feed) { shownKey = remoteKey(); fetchReview(); updateReviewButton(); return; }
+  if (!watch || remoteKey() !== shownKey) { review = { body: '', comments: [] }; viewed = new Map(); }
+  if (watch) { shownKey = remoteKey(); fetchReview(); updateReviewButton(); return; }
   try {
     const r = JSON.parse(stored(reviewKey()) || 'null');
     if (r && Array.isArray(r.comments)) review = { body: String(r.body || ''), comments: r.comments };
@@ -1158,7 +1144,7 @@ function flushReview() {
 addEventListener('pagehide', flushReview);
 function saveReview() {
   updateReviewButton();
-  if (feed) {
+  if (watch) {
     // Typing in the overall comment saves often: send the latest after a short pause.
     const key = remoteKey();
     if (pending && pending.key !== key) flushReview();
@@ -1343,7 +1329,7 @@ const isViewed = path => viewed.has(path) && (viewed.get(path) === null || viewe
 function setViewed(path, on) {
   if (on) viewed.set(path, diffHash(path)); else viewed.delete(path);
   for (const x of document.querySelectorAll('[data-viewed]')) if (x.dataset.viewed === path) { x.checked = on; x.parentElement.lastChild.textContent = ' Viewed'; }
-  if (feed) saveReview();
+  if (watch) saveReview();
   else try { localStorage.setItem(viewedKey(), JSON.stringify(Object.fromEntries(viewed))); } catch { /* storage unavailable */ }
   if (FG) markUnviewed(FG.nodes);
   renderGraph();
@@ -1465,13 +1451,13 @@ function renderSymbol(id) {
   out.innerHTML = `
     ${panelTop(file?.change ? viewedSwitch(file.path) : '')}
     <h2>${esc(n.kind === 'file' ? baseOf(n.file) : short(id))}</h2>
-    <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button>${feed && n.kind !== 'file' && canWhole(fileByPath.get(n.file)) && n.change?.status !== 'removed' ? ` · <button class="linkbtn" data-infile="${esc(n.id)}">Show in file</button>` : ''}</p>
+    <p class="path">${esc(n.file)}:${n.range[0]}–${n.range[1]} · ${esc(kindWord(n))} · <button class="linkbtn" data-mod="${esc(n.module)}">${esc(modName(n.module))}</button>${watch && n.kind !== 'file' && canWhole(fileByPath.get(n.file)) && n.change?.status !== 'removed' ? ` · <button class="linkbtn" data-infile="${esc(n.id)}">Show in file</button>` : ''}</p>
     <div class="chips" style="margin-bottom:10px">${changeOf(n) ? `<span class="badge b-${changeOf(n).status}">${statusWord(changeOf(n).status)} in this PR</span>` : '<span class="badge">unchanged</span>'}${n.route ? routeChip(n.route) : ''}${n.test ? '<span class="badge b-test">test</span>' : ''}${n.decorators ? n.decorators.map(d => `<span class="badge">@${esc(d)}</span>`).join('') : ''}</div>
     ${n.signature || ch?.previousSignature ? `<div class="sig">${ch?.signatureChanged ? `<span class="l">Before</span><span class="b">${esc(ch.previousSignature)}</span><span class="l">After</span><span class="a">${esc(n.signature)}</span>` : `<span class="l">Signature</span><span>${esc(n.signature)}</span>`}</div>` : ''}
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${fc ? `<h3>Circular imports<span class="count ${fcNew ? 'warn' : ''}">${fc.length - 1}</span></h3><p class="note">${fcNew ? 'This PR creates a cycle of imports between this file and these.' : 'This file is part of a cycle of imports that already existed.'}</p><div class="refs">${fc.filter(f => f !== file.path).map(f => symBtn(f)).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
-    ${file && feed && canWhole(file) ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
+    ${file && watch && canWhole(file) ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
     ${tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : ''}
     ${n.injects ? `<h3>Injects</h3><div class="refs">${n.injects.map(i => i.target ? symBtn(i.target, ` · ${esc(i.param)}${i.kind !== 'class' ? ' via ' + esc(i.decorator || 'token') + ' ' + esc(tokenLabel(i.token)) : ''}`) : `<button disabled>${esc(i.param)} <small>${esc(tokenLabel(i.token))}</small></button>`).join('')}</div>` : ''}
@@ -1489,11 +1475,11 @@ function renderView(v, el) {
   out = el;
   try {
     if (v.type === 'summary') renderSummary();
-    else if (v.type === 'feed') renderFeed();
+    else if (v.type === 'changes') renderChanges();
     else if (v.type === 'module') renderModule(v.id);
     else if (v.type === 'folder') renderFolder(v.id);
     else renderSymbol(v.id);
-    if (feed) fillSources(el);
+    if (watch) fillSources(el);
     hideGutters(el);
   } finally { out = $('#pin'); }
 }
@@ -1512,10 +1498,10 @@ function go(next, push = true) {
     else for (const x of [sym.id, ...sym.references, ...sym.uses]) { const k = keyOf(byId.get(x)?.file); if (k) hot.add(k); }
   }
   renderView(view, $('#pin'));
-  if (feed) updateFeedButton();
+  if (watch) updateChangesButton();
   renderGraph();
   $('#panel').scrollTop = 0;
-  $('#sheetBtn').setAttribute('aria-label', `Open the details: ${view.type === 'summary' ? 'summary' : view.type === 'feed' ? 'feed' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? folderName(view.id) : symLabel(view.id)}`);
+  $('#sheetBtn').setAttribute('aria-label', `Open the details: ${view.type === 'summary' ? 'summary' : view.type === 'changes' ? 'changes' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? folderName(view.id) : symLabel(view.id)}`);
   // A tap on the empty map deselects without opening the details again, and opening a folder only
   // moves the map: its details update behind the closed sheet.
   if (view.type !== 'summary' && view.type !== 'folder' && !view.fromCanvas && isMobile()) openSheet();
@@ -1711,98 +1697,58 @@ function title() {
   return pr.title ? pr.title : pr.baseRef ? `Changes against ${pr.baseRef}` : 'Pull request';
 }
 
-/* ---------- Feed (dyffle watch) ---------- */
-// Posts are Markdown messages, some with a dyffle of what changed since the previous post (index N in
-// the commit picker). Index 0 is the whole branch, rebuilt whenever a file changes.
-let feed = null, seen = 0, liveDirty = false, shortIds = new Map();
-const feedPost = i => feed && i > 0 ? feed.posts.find(p => p.index === i) : null;
+/* ---------- Changes (dyffle watch) ---------- */
+// dyffle watch keeps one dyffle per entry of the picker: the whole branch first, then each commit on the
+// branch against its parent, then the uncommitted changes. Each has a review of its own. The page keeps
+// to the one it shows by key, so a new commit (which moves the uncommitted changes along) doesn't switch it.
+let watch = null, seen = 0, liveDirty = false;
+const viewAt = i => watch?.views[i] ?? null;
+const commitCount = () => watch.views.filter(v => v.kind === 'commit').length;
 const ago = t => {
   const s = (Date.now() - Date.parse(t)) / 1000;
   return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : new Date(t).toLocaleDateString();
 };
-/** A symbol id for `code` in a post: a full id, a file path (with :line), or a short name that is unique. */
-const symFor = t => {
-  if (!D) return null;
-  const s = t.replace(/\(\)$/, '').replace(/:\d+(:\d+)?$/, '');
-  return byId.has(s) ? s : shortIds.get(s) || null;
-};
-function inline(s) {
-  return s.split(/(`[^`\n]+`)/).map((part, i) => {
-    if (i % 2) {
-      const t = part.slice(1, -1), id = symFor(t);
-      return id ? `<button class="symref" type="button" data-sym="${esc(id)}"><code>${esc(t)}</code></button>` : `<code>${esc(t)}</code>`;
-    }
-    return esc(part)
-      .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (all, text, url) => /^(https?:\/\/|#|\/|\.)/.test(url) ? `<a href="${url}" target="_blank" rel="noopener">${text}</a>` : text)
-      .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[^\w*])\*([^*\n]+)\*(?!\w)/g, '$1<i>$2</i>')
-      .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, '$1<i>$2</i>');
-  }).join('');
-}
-/** Markdown for posts: paragraphs, headings, lists, quotes, fenced code, inline code, bold, italics and links. */
-function md(src) {
-  const lines = String(src).replace(/\r\n/g, '\n').split('\n');
-  let html = '', para = [], list = null;
-  const flushPara = () => { if (para.length) html += `<p>${inline(para.join('\n'))}</p>`; para = []; };
-  const flushList = () => { if (list) html += `<${list.tag}>${list.items.map(x => `<li>${inline(x)}</li>`).join('')}</${list.tag}>`; list = null; };
-  const flush = () => { flushPara(); flushList(); };
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    let m;
-    if ((m = l.match(/^\s*(```|~~~)/))) {
-      flush();
-      const code = [];
-      while (++i < lines.length && !lines[i].trim().startsWith(m[1])) code.push(lines[i]);
-      html += `<pre><code>${esc(code.join('\n'))}</code></pre>`;
-    } else if (!l.trim()) flush();
-    else if ((m = l.match(/^#{1,6}\s+(.*)$/))) { flush(); html += `<h5>${inline(m[1])}</h5>`; }
-    else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { flush(); html += '<hr>'; }
-    else if (/^>/.test(l)) {
-      flush();
-      const q = [];
-      for (; i < lines.length && /^>/.test(lines[i]); i++) q.push(lines[i].replace(/^>\s?/, ''));
-      i--;
-      html += `<blockquote>${md(q.join('\n'))}</blockquote>`;
-    } else if ((m = l.match(/^\s*([-*+]|\d+[.)])\s+(.*)$/))) {
-      flushPara();
-      const tag = /\d/.test(m[1]) ? 'ol' : 'ul';
-      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
-      list.items.push(m[2]);
-    } else if (list && /^\s+\S/.test(l)) list.items[list.items.length - 1] += ' ' + l.trim();
-    else { flushList(); para.push(l); }
-  }
-  flush();
-  return html;
-}
+const timeTag = t => `<time datetime="${esc(t)}" title="${esc(new Date(t).toLocaleString())}">${ago(t)}</time>`;
 const statsText = s => `${plural(s.files, 'file')} · <span class="n-a">+${s.additions}</span> <span class="n-d">−${s.deletions}</span> · ${plural(s.symbols, 'symbol')}`;
-function postHtml(p, inFeed = true) {
-  const on = p.index !== undefined && p.index === current;
-  return `<article class="post${on && inFeed ? ' on' : ''}">
-    <div class="phead"><b>${esc(p.author)}</b><span>#${p.id}</span><time datetime="${esc(p.createdAt)}" title="${esc(new Date(p.createdAt).toLocaleString())}">${ago(p.createdAt)}</time></div>
-    ${p.title ? `<h4>${esc(p.title)}</h4>` : ''}
-    <div class="md">${md(p.message)}</div>
-    ${p.index !== undefined && inFeed ? `<button class="postchg${on ? ' on' : ''}" type="button" data-index="${p.index}"><span>${statsText(p.stats)}${p.comments ? ` · ${plural(p.comments, 'comment')}` : ''}</span><span class="go">${on ? 'On the map' : 'View change →'}</span></button>` : p.note && inFeed ? `<p class="note">${esc(p.note)}</p>` : ''}
-  </article>`;
+const commitLine = v => `<code>${esc(v.sha.slice(0, 7))}</code> · ${esc(v.author)} · ${timeTag(v.date)}`;
+function viewHtml(v) {
+  const on = v.index === current;
+  const sub = v.kind === 'commit' ? commitLine(v) : v.generatedAt ? `updated ${timeTag(v.generatedAt)}` : 'building…';
+  return `<button class="chgview${on ? ' on' : ''}" type="button" data-index="${v.index}">
+    <span class="t"><b>${esc(v.title)}</b><span class="go">${on ? 'On the map' : 'View →'}</span></span>
+    <span class="sub">${sub}</span>
+    ${v.stats ? `<span class="sub">${statsText(v.stats)}${v.comments ? ` · ${plural(v.comments, 'comment')}` : ''}</span>` : ''}
+  </button>`;
 }
-function renderFeed() {
-  const posts = [...feed.posts].reverse();
-  out.innerHTML = `<h2>Feed</h2>
-    <div class="feedlive"><button class="postchg${current === 0 ? ' on' : ''}" type="button" data-index="0"><span><b>Whole branch</b>, live · updated ${feed.live.generatedAt ? ago(feed.live.generatedAt) : '–'}${feed.live.comments ? ` · ${plural(feed.live.comments, 'comment')}` : ''}</span><span class="go">${current === 0 ? 'On the map' : 'View →'}</span></button></div>
-    ${posts.length ? posts.map(p => postHtml(p)).join('') : '<p class="note">No posts yet. Claude posts here with <code>dyffle post</code>, or by writing a JSON file to <code>.dyffle/inbox/</code>.</p>'}`;
-  seen = feed.posts.length;
+function renderChanges() {
+  const branch = watch.views.find(v => v.kind === 'branch'), commits = watch.views.filter(v => v.kind === 'commit'), open = watch.views.find(v => v.kind === 'uncommitted');
+  out.innerHTML = `<h2>Changes</h2>
+    ${viewHtml(branch)}
+    <h3>Commits<span class="count">${commits.length}</span></h3>
+    ${commits.length ? commits.map(viewHtml).join('') : '<p class="note">No commits on this branch yet.</p>'}
+    <h3>Not committed</h3>
+    ${viewHtml(open)}`;
+  seen = commits.length;
 }
-function updateFeedButton() {
-  const b = $('#feedBtn');
-  b.hidden = !feed;
-  if (!feed) return;
-  if (view.type === 'feed') seen = feed.posts.length;
-  const n = feed.posts.length - seen, badge = b.querySelector('.badge');
+/** Render the changes list again where it is scrolled to, when it is open. */
+function rerenderChanges() {
+  if (view.type !== 'changes') return;
+  const top = $('#panel').scrollTop;
+  renderView(view, $('#pin'));
+  $('#panel').scrollTop = top;
+}
+function updateChangesButton() {
+  const b = $('#changesBtn');
+  b.hidden = !watch;
+  if (!watch) return;
+  if (view.type === 'changes') seen = commitCount();
+  const n = Math.max(0, commitCount() - seen), badge = b.querySelector('.badge');
   badge.hidden = !n;
   badge.textContent = n;
-  b.classList.toggle('on', view.type === 'feed');
-  b.setAttribute('aria-label', n ? `Feed, ${plural(n, 'new post')}` : 'Feed');
+  b.classList.toggle('on', view.type === 'changes');
+  b.setAttribute('aria-label', n ? `Changes, ${plural(n, 'new commit')}` : 'Changes');
 }
-$('#feedBtn').addEventListener('click', () => { if (view.type === 'feed') back(); else go({ type: 'feed' }); updateFeedButton(); });
+$('#changesBtn').addEventListener('click', () => { if (view.type === 'changes') back(); else go({ type: 'changes' }); updateChangesButton(); });
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-index]');
   if (b) showIndex(Number(b.dataset.index), { type: 'summary' });
@@ -1813,45 +1759,50 @@ function setStatus(text, action) {
   s.textContent = text || '';
   s.disabled = !action;
 }
-/** Show the new branch dyffle, unless a comment is being written: then offer it. */
-function refreshLive() {
-  if (current !== 0) return;
-  if (document.querySelector('.cform')) { liveDirty = true; setStatus('Branch changed: update', true); return; }
+/** Show the new version of the dyffle on the map, unless a comment is being written: then offer it. */
+function refreshCurrent() {
+  if (document.querySelector('.cform')) { liveDirty = true; setStatus('Changed: update', true); return; }
   liveDirty = false;
-  const top = $('#panel').scrollTop;
-  loadIndex(0).then(d => {
-    if (current !== 0) return;
-    const v = view.type === 'feed' ? { type: 'feed' } : undefined;
-    useIndex(d, v);
+  const top = $('#panel').scrollTop, at = current;
+  loadIndex(at).then(d => {
+    if (current !== at) return;
+    useIndex(d, view.type === 'changes' ? { type: 'changes' } : undefined);
     $('#panel').scrollTop = top;
   }).catch(failed);
 }
-$('#liveStatus').addEventListener('click', () => { if (liveDirty) { setStatus(''); refreshLive(); } });
-function loadFeed() {
-  return Promise.all([fetchJson('feed.json'), fetchJson('indexes.json')]).then(([f, labels]) => {
-    feed = f;
+$('#liveStatus').addEventListener('click', () => { if (liveDirty) { setStatus(''); refreshCurrent(); } });
+/** Load the list of dyffles again, staying on the one shown. Resolves to true when that one is gone (e.g. an amended commit). */
+function loadViews() {
+  return Promise.all([fetchJson('views.json'), fetchJson('indexes.json')]).then(([w, labels]) => {
+    const key = remoteKey();
+    watch = w;
     indexes = labels.length > 1 ? labels : null;
+    const at = watch.views.findIndex(v => v.key === key);
+    current = Math.max(0, at);
     renderCommits();
-    if (view.type === 'feed') { const top = $('#panel').scrollTop; renderView(view, $('#pin')); $('#panel').scrollTop = top; }
-    updateFeedButton();
+    rerenderChanges();
+    updateChangesButton();
+    return at < 0;
   });
 }
 function startLive() {
   const es = new EventSource('events');
   let connected = false;
-  es.addEventListener('live', () => { feed.live.generatedAt = new Date().toISOString(); refreshLive(); if (current !== 0 && view.type === 'feed') renderView(view, $('#pin')); });
-  es.addEventListener('feed', () => loadFeed().catch(() => {}));
+  es.addEventListener('views', e => {
+    const { changed } = JSON.parse(e.data);
+    loadViews().then(gone => { if (gone || changed.includes(remoteKey())) refreshCurrent(); }).catch(() => {});
+  });
   es.addEventListener('review', e => {
     const r = JSON.parse(e.data);
     // Another page changed this review: show it, unless a comment is being written here.
     if (r.client !== clientId && r.key === remoteKey() && !document.querySelector('.cform') && document.activeElement?.id !== 'overall') fetchReview();
-    if (r.key === 'live') feed.live.comments = r.comments;
-    else { const p = feed.posts.find(x => `post-${x.id}` === r.key); if (p) p.comments = r.comments; }
-    if (view.type === 'feed') { const top = $('#panel').scrollTop; renderView(view, $('#pin')); $('#panel').scrollTop = top; }
+    const v = watch.views.find(x => x.key === r.key);
+    if (v) v.comments = r.comments;
+    rerenderChanges();
   });
   es.addEventListener('status', e => { if (!liveDirty) setStatus(JSON.parse(e.data).building ? 'Updating…' : ''); });
   // A restarted dyffle watch: pick up what changed while the page was disconnected.
-  es.addEventListener('open', () => { if (connected) loadFeed().then(refreshLive).catch(() => {}); connected = true; });
+  es.addEventListener('open', () => { if (connected) loadViews().then(refreshCurrent).catch(() => {}); connected = true; });
 }
 
 /* ---------- Whole files (dyffle watch) ---------- */
@@ -1966,15 +1917,13 @@ function useIndex(data, next) {
     ...D.nodes.filter(n => n.kind !== 'file').map(n => ({ id: n.id, label: short(n.id) + (n.route ? '  ' + routeText(n.route) : ''), sub: n.file, key: (short(n.id) + ' ' + (n.route ? routeText(n.route) : '')).toLowerCase() })),
     ...D.modules.map(m => ({ mod: m.id, label: m.name, sub: m.id, key: (m.name + ' ' + m.id).toLowerCase() })),
   ];
-  shortIds = new Map();
-  for (const n of D.nodes) { const k = short(n.id); shortIds.set(k, shortIds.has(k) ? '' : n.id); }
   selected = null;
   build();
-  // Opening a post's change from the feed: Back returns to the feed.
-  history = next && next.type !== 'feed' && feed ? [{ type: 'feed' }] : [];
+  // Opening a dyffle from the changes list: Back returns to the list.
+  history = next && next.type !== 'changes' && watch ? [{ type: 'changes' }] : [];
   closeSide();
   go(next ?? keptView(prev), false);
-  updateFeedButton();
+  updateChangesButton();
 }
 function renderCommits() {
   const box = $('#commits');
@@ -1998,11 +1947,11 @@ const embedded = !!(window.DYFFLE_LIST || window.DYFFLE_DATA);
 Promise.all([
   (window.DYFFLE_LIST ? Promise.resolve(window.DYFFLE_LIST.map(x => x.label)) : embedded ? Promise.resolve(null) : fetch('indexes.json').then(r => r.ok ? r.json() : null, () => null))
     .then(labels => { indexes = labels && labels.length > 1 ? labels : null; renderCommits(); return loadIndex(0); }),
-  // Served by dyffle watch: there is a feed, and the page follows its changes.
-  embedded ? null : fetch('feed.json').then(r => r.ok ? r.json() : null, () => null),
-]).then(([data, f]) => {
-  if (f) { feed = f; startLive(); }
-  useIndex(data, f ? { type: 'feed' } : undefined);
+  // Served by dyffle watch: there is a list of changes, and the page follows them.
+  embedded ? null : fetch('views.json').then(r => r.ok ? r.json() : null, () => null),
+]).then(([data, w]) => {
+  if (w) { watch = w; startLive(); }
+  useIndex(data, w ? { type: 'changes' } : undefined);
 }).catch(failed);
 })();
 </script>
