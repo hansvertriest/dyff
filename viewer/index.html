@@ -125,6 +125,8 @@ main{--w1:500px;--w2:440px;flex:1;min-height:0;display:grid;grid-template-column
 .node .nv circle{fill:var(--accent)}
 .node .meta .a{fill:var(--add)} .node .meta .d{fill:var(--del)} .node .meta .w{fill:var(--del)}
 .node .tr{font:500 11.5px var(--sans);fill:var(--muted)} .node .tr .w{fill:var(--del)} .node .tr .t{fill:var(--mod)}
+.node.lcard .nm{font:500 13px var(--mono)} .node.lcard .pth{font-size:11.5px}
+.blbl{font:600 11px var(--sans);letter-spacing:.06em;fill:var(--muted)}
 .node:focus{outline:none}
 .node:focus-visible rect.box{stroke:var(--accent);stroke-width:2}
 .edge{fill:none;stroke:var(--edge);stroke-width:1.4}
@@ -443,6 +445,7 @@ details.file>summary.fhead:hover{background:var(--line)}
       <label class="toggle"><input type="checkbox" id="showLinks"> Show all links</label>
       <label class="toggle"><input type="checkbox" id="showCycles"> Show existing cycles</label>
       <label class="toggle"><input type="checkbox" id="showTests"> Count test files</label>
+      <label class="toggle" id="layersWrap" hidden><input type="checkbox" id="showLayers" checked> Functions in layers</label>
       <div class="legend" aria-label="Legend">
         <span><i style="background:var(--mod)"></i>Changed</span>
         <span><i style="background:var(--add)"></i>New</span>
@@ -483,7 +486,7 @@ const short = id => id.includes('#') ? id.slice(id.indexOf('#') + 1) : baseOf(id
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 let D, byId, modById, fileByPath, nodesByFile, M, FG, folder = '', projectRoot = '';
-let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, history = [];
+let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, showLayers = true, history = [];
 
 /* ---------- Model ---------- */
 function build() {
@@ -774,6 +777,8 @@ let hot = new Set(), hoverMod = null, boxPos = new Map();
 function renderGraph() {
   const cv = $('#canvas');
   hoverMod = null;
+  $('#layersWrap').hidden = !moduleAt(folder);
+  if (layerModule()) return renderLayers(layerModule());
   const G = graph();
   renderCrumbs();
   const ids = visibleIds();
@@ -848,6 +853,79 @@ function renderGraph() {
     ${eh}${nh}</svg>`;
   cam.w = vw; cam.h = height;
   const key = `${folder}|${vw}x${height}`;
+  if (key !== cam.key) { cam.key = key; fitCam(); }
+  else { clampCam(); applyCam(); }
+}
+
+/* ---------- Layers ---------- */
+// A folder that is one module opens as its functions in bands by call depth from its entry points
+// (routes, and functions called from outside the module): entry points, logic, data and adapters.
+// Each card carries its test badge. What the module calls in other modules is a last band of dashed
+// cards; arrows only run between functions of the module.
+const LW = 236, LH = 74, LGX = 22, LGY = 18, BGAP = 40, LBL = 150, PER_ROW = 4;
+/** The module the folder holds and is the root of, when the dyffle knows test cases. */
+function moduleAt(dir) {
+  if (!hasTestCases()) return null;
+  const mods = new Set(D.files.filter(f => under(f.path, dir) && !f.test && f.change?.status !== 'removed').map(f => f.module));
+  const [m] = mods;
+  return mods.size === 1 && moduleRoot(m) === dir ? m : null;
+}
+const layerModule = () => showLayers ? moduleAt(folder) : null;
+/** A function's test badge: its direct tests and how many changed, or its gap. */
+function fnBadge(n) {
+  const g = gapOf(n);
+  if (g === 'none') return '<tspan class="w">no tests</tspan>';
+  if (g === 'through') return '<tspan class="t">only via callers</tspan>';
+  const k = directTests(n).length, d = directTests(n).filter(t => t.change).length + removedTestsOf(n.id).length;
+  return `${plural(k, 'test')}${d ? ` · <tspan class="t">${d} changed</tspan>` : ''}`;
+}
+function renderLayers(mod) {
+  const cv = $('#canvas');
+  renderCrumbs();
+  const paths = new Set(D.files.filter(f => f.module === mod && !f.test).map(f => f.path));
+  const L = layersOf(paths);
+  const bands = [0, 1, 2, 3].map(b => ({ name: BAND_NAMES[b], ids: L.fns.filter(n => L.band(n) === b).map(n => n.id) }));
+  bands.push({ name: 'Calls out to', ids: [...L.out.keys()], ghost: true });
+  const pos = new Map();
+  let y = PAD, nh = '', labels = '', width = 300;
+  for (const b of bands) {
+    if (!b.ids.length) continue;
+    // A band name wraps to fit the label column.
+    const lines = b.name.toUpperCase().split(' ').reduce((ls, w) => { const l = ls[ls.length - 1]; if (l && (l + ' ' + w).length <= 16) ls[ls.length - 1] = l + ' ' + w; else ls.push(w); return ls; }, []);
+    labels += `<text class="blbl" x="${PAD}" y="${y + 20}">${lines.map((l, i) => `<tspan x="${PAD}" dy="${i ? 15 : 0}">${esc(l)}</tspan>`).join('')}</text>`;
+    b.ids.forEach((id, i) => pos.set(id, { x: PAD + LBL + (i % PER_ROW) * (LW + LGX), y: y + Math.floor(i / PER_ROW) * (LH + LGY), ghost: b.ghost }));
+    const rows = Math.ceil(b.ids.length / PER_ROW);
+    width = Math.max(width, PAD * 2 + LBL + Math.min(PER_ROW, b.ids.length) * (LW + LGX));
+    y += rows * (LH + LGY) - LGY + BGAP;
+  }
+  const height = y - BGAP + PAD + 20;
+  const sel = view.type === 'symbol' ? view.id : null;
+  for (const [id, p] of pos) {
+    const n = byId.get(id), ch = n.change?.status;
+    const cls = ['node', 'lcard', 's-' + (ch || 'none'), p.ghost ? 'ext' : '', !ch && !p.ghost ? 'context' : '', id === sel ? 'sel' : ''].join(' ');
+    const sub = p.ghost ? `${dirOf(n.file)}/ ↗ · from ${L.out.get(id).map(x => byId.get(x).name).join(', ')}` : n.route ? routeText(n.route) : `${kindWord(n)} · ${baseOf(n.file)}`;
+    nh += `<g class="${cls}" data-sym="${esc(id)}" tabindex="0" role="button" aria-label="${esc(short(id))}" transform="translate(${p.x},${p.y})">
+      <rect class="box" width="${LW}" height="${LH}" rx="9"/><rect class="bar" x="0" y="0" width="5" height="${LH}" rx="2.5"/>
+      <text class="nm" x="16" y="23">${esc(clipStart(short(id), 27))}</text>
+      <text class="pth" x="16" y="42">${esc(clip(sub, 32))}</text>
+      <text class="tr" x="16" y="61">${isFn(n) ? fnBadge(n) : ''}</text><title>${esc(short(id))}\n${esc(n.file)}</title></g>`;
+  }
+  let eh = '';
+  for (const n of L.fns) for (const u of L.calls(n)) {
+    const a = pos.get(n.id), b = pos.get(u);
+    if (!a || !b || a.ghost || b.ghost || u === n.id) continue;
+    const x1 = a.x + LW / 2, y1 = a.y + LH, x2 = b.x + LW / 2, y2 = b.y - 6;
+    const d = b.y > a.y ? `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`
+      : `M${a.x + LW},${a.y + LH / 2} C${a.x + LW + 40},${a.y + LH / 2} ${b.x + LW + 40},${b.y + LH / 2} ${b.x + LW + 4},${b.y + LH / 2}`;
+    eh += `<path class="edge${sel && sel !== n.id && sel !== u ? ' dim' : ''}" d="${d}" marker-end="url(#mn)"><title>${esc(short(n.id))} → ${esc(short(u))}</title></path>`;
+  }
+  boxPos = new Map([...pos].map(([id, p]) => [id, { x: p.x, y: p.y }]));
+  const vw = Math.max(width, 300);
+  cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="Functions of ${esc(modName(mod))} in layers">
+    <defs><marker id="mn" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-n" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+    ${labels}${eh}${nh}</svg>`;
+  cam.w = vw; cam.h = height;
+  const key = `layers|${folder}|${vw}x${height}`;
   if (key !== cam.key) { cam.key = key; fitCam(); }
   else { clampCam(); applyCam(); }
 }
@@ -1816,7 +1894,9 @@ function go(next, push = true) {
   hot = new Set();
   const sym = view.type === 'symbol' ? byId.get(view.id) : null;
   // A module opens its folder and a symbol the folder of its file; the folder is kept in the view so Back returns to it.
-  folder = view.folder = folderFor(view.folder ?? (sym ? dirOf(sym.file) : view.type === 'folder' ? view.id : view.type === 'module' && modById.has(view.id) ? moduleRoot(view.id) : undefined));
+  // A function of the module shown in layers keeps the layers on screen.
+  const lm = layerModule(), keep = sym && lm && !sym.test && sym.module === lm ? folder : undefined;
+  folder = view.folder = folderFor(view.folder ?? keep ?? (sym ? dirOf(sym.file) : view.type === 'folder' ? view.id : view.type === 'module' && modById.has(view.id) ? moduleRoot(view.id) : undefined));
   if (sym) {
     // A file is selected; a symbol inside a file lights up the boxes it is used from and uses.
     const { keyOf } = graph();
@@ -1833,11 +1913,13 @@ function go(next, push = true) {
   if (view.type !== 'summary' && view.type !== 'folder' && !view.fromCanvas && isMobile()) openSheet();
   // Bring the selected box into view: a selected module or file, else the file or module of a symbol.
   // Opening a folder fits its own boxes (not the other folders and modules around them).
-  const target = selected ?? (sym ? graph().keyOf(sym.file) : null);
+  const layers = !!layerModule();
+  const target = layers ? (sym && boxPos.has(sym.id) ? sym.id : null) : selected ?? (sym ? graph().keyOf(sym.file) : null);
   if (target) focusBox(target);
+  else if (layers && !view.fromCanvas) fitCam();
   else if (!view.fromCanvas) {
     const G = graph();
-    fitBoxes([...boxPos.keys()].filter(k => !G.nodes.get(k)?.ext));
+    fitBoxes([...boxPos.keys()].filter(k => layers || !G.nodes.get(k)?.ext));
   }
 }
 
@@ -1994,6 +2076,7 @@ const hoverLinks = id => {
 $('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#canvas').addEventListener('mouseleave', () => hoverLinks(null));
 $('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
+$('#showLayers').addEventListener('change', e => { showLayers = e.target.checked; go(view, false); });
 $('#showTests').addEventListener('change', e => { showTests = e.target.checked; build(); go(view, false); if (side) renderView(side, $('#pin2')); });
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || document.activeElement === $('#q') || e.target.closest?.('textarea')) return;
