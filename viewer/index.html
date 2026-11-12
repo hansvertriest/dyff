@@ -358,6 +358,37 @@ details.file>summary.fhead:hover{background:var(--line)}
   .pin{padding:0 16px calc(36px + env(safe-area-inset-bottom))}
   @media (prefers-reduced-motion: reduce){.panel,.panel.open{transition:none}}
 }
+/* Test cases, shown by their description */
+.tgrp{margin:12px 0 4px;font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tgrp code{font-size:12px;color:var(--ink)}
+.tcrumb{font-size:12px;color:var(--muted);margin:8px 0 2px 26px}
+.tcase{border-radius:6px;margin:1px 0}
+.tcase>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:18px 1fr auto;gap:6px;align-items:start;padding:4px 8px;border-radius:6px;font-size:13px;line-height:1.45}
+.tcase>summary::-webkit-details-marker{display:none}
+.tcase>summary:hover{background:var(--surface-2)}
+.tcase .g{font:600 13px var(--mono);text-align:center;color:var(--muted)}
+.tcase.add>summary,.trow.add{background:var(--add-bg)} .tcase.add .g,.trow.add .g{color:var(--add)}
+.tcase.del>summary,.trow.del{background:var(--del-bg)} .tcase.del .g,.trow.del .g{color:var(--del)}
+.tcase.mod>summary{background:var(--mod-bg)} .tcase.mod .g{color:var(--mod)}
+.tcase.del>summary .tx{text-decoration:line-through;text-decoration-color:var(--del)}
+.trow{display:grid;grid-template-columns:18px 1fr;gap:6px;padding:4px 8px;border-radius:6px}
+.tcase .tbody{padding:2px 8px 8px 32px;font-size:12.5px}
+.tcase .tbody p{margin:4px 0;color:var(--muted)}
+.tcase .tbody b{font-weight:500;color:var(--ink)}
+.texp{display:grid;grid-template-columns:14px 1fr;gap:4px;padding:1px 4px;border-radius:4px;color:var(--ink)}
+.texp .g{font:600 12px var(--mono);color:var(--muted)}
+.texp.add{background:var(--add-bg)} .texp.add .g{color:var(--add)}
+.texp.del{background:var(--del-bg)} .texp.del .g{color:var(--del)}
+.wa{background:var(--add-bg);color:var(--add);border-radius:3px;padding:0 1px}
+.wd{background:var(--del-bg);color:var(--del);border-radius:3px;padding:0 1px;text-decoration:line-through}
+.tflag{font-size:11px;padding:0 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;margin-left:4px}
+.tflag.mod{color:var(--mod);border-color:var(--mod)}
+.tfold>summary{list-style:none;cursor:pointer;margin:4px 0;padding:4px 8px 4px 32px;font-size:12.5px;color:var(--accent);border-top:1px dashed var(--line);border-bottom:1px dashed var(--line)}
+.tfold>summary::-webkit-details-marker{display:none}
+.tfold[open]>summary{display:none}
+.tempty{border:1px dashed var(--line);border-radius:10px;padding:12px;text-align:center;color:var(--muted);font-size:13px}
+.tempty b{color:var(--ink);display:block;margin-bottom:2px}
+.tsum{margin-left:auto;font-weight:500;font-size:12px;display:flex;gap:6px}
 </style>
 </head>
 <body>
@@ -1079,6 +1110,7 @@ function renderSummary() {
     ${C.removedModuleDependencies.length ? section('Removed module dependencies', C.removedModuleDependencies, e => `<button class="row" data-mod="${esc(e.from)}"><span class="main">${esc(modName(e.from))} → ${esc(modName(e.to))}</span><span class="sub">${e.via}</span></button>`) : ''}
     ${section('Affected routes', C.affectedRoutes, r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(id => `<span>${esc(symLabel(id))}</span>`).join('')}</span></button>`)}
     ${section('Changed code no test reaches', C.untested, id => `<button class="row" data-sym="${esc(id)}"><span class="main"><code>${esc(symLabel(id))}</code></span><span class="sub">${esc(byId.get(id)?.file)}</span></button>`, false)}
+    ${testChangesSection()}
     ${reviewSection()}
     <h3>What changed<span class="count">${changedFiles().length} files</span></h3>
     ${changedFiles().map(f => fileSection(f, true)).join('')}
@@ -1345,8 +1377,9 @@ document.addEventListener('change', e => { const p = e.target.dataset?.viewed; i
 const bySize = (a, b) => (b.change.additions + b.change.deletions) - (a.change.additions + a.change.deletions);
 /** A changed file: its changed symbols with their own diffs, then the whole file diff. */
 const isVue = p => p.endsWith('.vue');
-function fileSection(f, collapsed = false) {
-  const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
+/** `tests: false` leaves test cases out, for a spec file's panel that lists them on its own. */
+function fileSection(f, collapsed = false, tests = true) {
+  const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && (tests || s.kind !== 'test') && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
   // A .vue file's <template> and <style> blocks belong to no symbol: they get a section each, around the script's symbols.
   const sections = f.change.sections || [], open = syms.length + sections.length <= 4 ? ' open' : '';
   const sectionHtml = name => sections.filter(x => x.name === name).map(x => {
@@ -1355,6 +1388,7 @@ function fileSection(f, collapsed = false) {
       <div class="sbody">${diffBlock(x.hunks, f.path, f.path)}</div></details>`;
   }).join('');
   const symHtml = sectionHtml('template') + syms.map(s => {
+    if (s.kind === 'test') return testCaseRow(s, '', !!open);
     const c = counts(s.change.hunks);
     return `<details class="sym"${open}><summary><span class="sname">${esc(s.kind === 'file' ? isVue(f.path) ? 'Script: imports and top level' : 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
       <div class="sbody">${diffBlock(s.change.hunks, f.path, s.id)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
@@ -1421,6 +1455,150 @@ function renderFolder(dir) {
     ${affected.length ? `<h3>Not changed, but use changed code<span class="count">${affected.length}</span></h3><div class="refs">${affected.map(f => symBtn(f.path)).join('')}</div>` : ''}`;
 }
 
+/* ---------- Tests ---------- */
+// A test case is shown by its description: the describe blocks around it, its title and its
+// assertions in words. Never its code. A changed one shows as a diff of that description.
+const tcOf = n => n.testCase || { title: n.name, suites: [], expects: [] };
+const CODE_KINDS = new Set(['method', 'function', 'constructor', 'class']);
+const MODE_WORD = { skip: 'skipped', only: 'only', todo: 'todo' };
+/** Longest-common-subsequence diff of two lists: [['=', x] | ['-', x] | ['+', x]]. */
+function listDiff(A, B) {
+  const m = A.length, n = B.length, L = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const o = []; let i = 0, j = 0;
+  while (i < m && j < n) { if (A[i] === B[j]) { o.push(['=', A[i]]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) o.push(['-', A[i++]]); else o.push(['+', B[j++]]); }
+  while (i < m) o.push(['-', A[i++]]); while (j < n) o.push(['+', B[j++]]);
+  return o;
+}
+/** One side of a word diff, with the words only that side has highlighted. */
+const wordSide = (o, k) => o.filter(x => x[0] === '=' || x[0] === k).map(x => x[0] === k ? `<span class="${k === '+' ? 'wa' : 'wd'}">${esc(x[1])}</span>` : esc(x[1])).join(' ');
+const sameList = (a, b) => (a || []).join('\n') === (b || []).join('\n');
+/** How a test case changed, in words: { kind: 'add' | 'del' | 'mod' | '', title rows, notes, assertion lines }. */
+function testChange(n) {
+  const tc = tcOf(n), ch = n.change, st = ch?.status;
+  const exp = l => l.map(([t, x]) => `<div class="texp ${t === '+' ? 'add' : t === '-' ? 'del' : ''}"><span class="g">${t === '=' ? '' : t === '-' ? '−' : '+'}</span><span>${esc(x)}</span></div>`).join('');
+  if (st === 'added') return { kind: 'add', glyph: '+', title: esc(tc.title), notes: [], expects: exp(tc.expects.map(x => ['+', x])) };
+  if (st === 'removed') return { kind: 'del', glyph: '−', title: esc(tc.title), notes: [], expects: exp(tc.expects.map(x => ['-', x])) };
+  const prev = st === 'modified' ? ch.previousTestCase : null;
+  if (!prev) return { kind: '', glyph: '', title: esc(tc.title), notes: [], expects: exp(tc.expects.map(x => ['=', x])) };
+  const notes = [], flags = [];
+  const renamed = prev.title !== tc.title;
+  const wd = renamed ? listDiff(prev.title.split(' '), tc.title.split(' ')) : null;
+  if (!sameList(prev.suites, tc.suites)) notes.push(`Moved from <s>${esc([...prev.suites].join(' › ') || 'the top of the file')}</s>.`);
+  if (prev.mode !== tc.mode) flags.push(tc.mode ? `now ${MODE_WORD[tc.mode]}` : `no longer ${MODE_WORD[prev.mode]}`);
+  const expectsChanged = !sameList(prev.expects, tc.expects);
+  if (!renamed && !expectsChanged && sameList(prev.suites, tc.suites) && prev.mode === tc.mode) flags.push('description unchanged');
+  const before = new Set(ch.previousUses || []), after = new Set(n.uses || []);
+  const gained = [...after].filter(u => !before.has(u) && byId.has(u)), lost = [...before].filter(u => !after.has(u));
+  if (ch.previousUses && (gained.length || lost.length)) {
+    const names = l => l.map(u => `<b>${esc(symLabel(u))}</b>`).join(', ');
+    notes.push([gained.length ? `Now also reaches ${names(gained)}.` : '', lost.length ? `No longer reaches ${names(lost)}.` : ''].filter(Boolean).join(' '));
+  }
+  if (flags.includes('description unchanged')) notes.push("The test changed but its description didn't. Check it still fits.");
+  return {
+    kind: 'mod', glyph: '~', renamed, wd, flags,
+    title: renamed ? wordSide(wd, '+') : esc(tc.title),
+    notes,
+    expects: exp(listDiff(prev.expects, tc.expects)),
+  };
+}
+const modeFlags = n => { const m = tcOf(n).mode; return m ? `<span class="tflag">${MODE_WORD[m]}</span>` : ''; };
+/** A test case as a row that opens to its assertions. `extra` goes after the title (e.g. "2 steps"). */
+function testCaseRow(n, extra = '', open = false) {
+  const c = testChange(n);
+  const flags = modeFlags(n) + (c.flags || []).map(f => `<span class="tflag mod">${esc(f)}</span>`).join('') + extra;
+  const before = c.renamed ? `<div class="trow del"><span class="g">−</span><span class="tx">${wordSide(c.wd, '-')}</span></div>` : '';
+  const body = `${c.notes.map(x => `<p>${x}</p>`).join('')}${c.expects || '<p>No assertions found in its body.</p>'}<p><button class="linkbtn" data-sym="${esc(n.id)}">Open test →</button></p>`;
+  return `${before}<details class="tcase ${c.kind}"${open ? ' open' : ''}><summary><span class="g">${c.glyph}</span><span class="tx">${c.title}</span><span>${flags}</span></summary><div class="tbody">${body}</div></details>`;
+}
+/** Test cases under the describe blocks and file they are in, changed ones first, unchanged ones folded when `fold`. */
+function testList(entries, fold) {
+  const groups = [];
+  for (const e of entries) {
+    const tc = tcOf(e.t), k = e.t.file + '|' + tc.suites.join(' › ');
+    let g = groups.find(x => x.k === k);
+    if (!g) groups.push(g = { k, file: e.t.file, suites: tc.suites, items: [] });
+    g.items.push(e);
+  }
+  return groups.map(g => {
+    const changed = g.items.filter(e => e.t.change), same = g.items.filter(e => !e.t.change);
+    const row = e => testCaseRow(e.t, e.extra || '', !!e.t.change);
+    const rest = same.map(row).join('');
+    return `<div class="tcrumb">${esc(g.suites.join(' › ') || '(top level)')} · ${esc(baseOf(g.file))}</div>${changed.map(row).join('')}${
+      fold && changed.length && same.length ? `<details class="tfold"><summary>⋯ ${plural(same.length, 'unchanged test')}</summary>${rest}</details>` : rest}`;
+  }).join('');
+}
+const changeCounts = list => {
+  const c = { add: 0, del: 0, mod: 0 };
+  for (const t of list) { const s = t.change?.status; if (s === 'added') c.add++; else if (s === 'removed') c.del++; else if (s) c.mod++; }
+  return c;
+};
+const countsHtml = c => `${c.add ? `<span class="n-a">+${c.add}</span>` : ''}${c.del ? `<span class="n-d">−${c.del}</span>` : ''}${c.mod ? `<span style="color:var(--mod)">~${c.mod}</span>` : ''}`;
+/** Removed test cases that called a node themselves: they no longer cover it. */
+const removedTestsOf = id => D.nodes.filter(t => t.kind === 'test' && t.change?.status === 'removed' && (t.change.previousUses || []).includes(id));
+/**
+ * A function's "Tests" section: the test cases that call it directly, then the ones that reach it
+ * through other code, grouped by the caller they come through.
+ */
+function testsSection(n) {
+  if (n.kind === 'file' || n.test) return '';
+  const C = D.checks;
+  if (!D.nodes.some(t => t.kind === 'test')) {
+    // An index from before dyffle knew test cases, or a project without any: the spec files that reach it.
+    const tests = C.tests.find(t => t.id === n.id);
+    return tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : '';
+  }
+  const entries = (n.testedBy || []).map(e => ({ t: byId.get(e.test), steps: e.steps })).filter(e => e.t);
+  for (const t of removedTestsOf(n.id)) entries.push({ t, steps: 1 });
+  const live = entries.filter(e => e.t.change?.status !== 'removed');
+  const c = changeCounts(entries.map(e => e.t));
+  const fold = !!(c.add + c.del + c.mod);
+  const head = `<h3>Tests<span class="count ${live.length ? '' : 'warn'}">${live.length}</span>${fold ? `<span class="tsum">${countsHtml(c)}<span class="note">in this PR</span></span>` : ''}</h3>`;
+  // Spec files that reach it only from setup code (beforeEach, helpers): no test case to show.
+  const files = (C.tests.find(t => t.id === n.id)?.testFiles || []).filter(f => !entries.some(e => e.t.file === f));
+  const setup = files.length ? `<p class="note">Also reached from setup code in ${files.map(f => `<button class="linkbtn" data-sym="${esc(f)}">${esc(baseOf(f))}</button>`).join(', ')}.</p>` : '';
+  if (!entries.length) {
+    if (!CODE_KINDS.has(n.kind) && !files.length) return '';
+    return head + (files.length ? setup : `<div class="tempty"><b>No test reaches this ${esc(kindWord(n))}</b>No test case calls it, directly or through other code.${n.change ? ' It changed in this PR.' : ''}</div>`);
+  }
+  const direct = entries.filter(e => e.steps === 1);
+  // For a test that reaches it through other code: the caller on the way, nearest to this node.
+  const via = new Map();
+  for (const e of entries.filter(e => e.steps > 1)) {
+    const r = n.references.find(r => (byId.get(r)?.testedBy || []).some(x => x.test === e.t.id && x.steps === e.steps - 1)) || '';
+    if (!via.has(r)) via.set(r, []);
+    via.get(r).push({ ...e, extra: e.steps > 2 ? `<span class="tflag">${e.steps} steps</span>` : '' });
+  }
+  return head + (direct.length ? `<div class="tgrp">Tested directly<span class="count">${direct.length}</span></div>${testList(direct, fold)}` : '')
+    + [...via].map(([r, list]) => `<div class="tgrp">Through ${r ? `<button class="linkbtn" data-sym="${esc(r)}"><code>${esc(symLabel(r))}</code></button>` : 'other code'}<span class="count">${list.length}</span></div>${testList(list, fold)}`).join('')
+    + setup;
+}
+/** A test case's own panel: what it checks, and how that changed. */
+function testCaseSection(n) {
+  const tc = tcOf(n), c = testChange(n);
+  const before = c.renamed ? `<div class="trow del"><span class="g">−</span><span class="tx">${wordSide(c.wd, '-')}</span></div>` : '';
+  return `<h3>What it checks</h3><p class="note">${esc(tc.suites.join(' › ') || '(top level)')}</p>
+    ${before}<div class="tcase ${c.kind}"><div class="trow ${c.kind}" style="${c.kind === 'mod' ? 'background:var(--mod-bg)' : ''}"><span class="g" style="${c.kind === 'mod' ? 'color:var(--mod)' : ''}">${c.glyph}</span><span>${c.title} ${modeFlags(n)}${(c.flags || []).map(f => `<span class="tflag mod">${esc(f)}</span>`).join('')}</span></div>
+    <div class="tbody">${c.notes.map(x => `<p>${x}</p>`).join('')}${c.expects || '<p>No assertions found in its body.</p>'}</div></div>`;
+}
+/** A spec file's test cases, under their describe blocks. */
+function specSection(path) {
+  const tests = (nodesByFile.get(path) || []).filter(t => t.kind === 'test');
+  if (!tests.length) return '';
+  const c = changeCounts(tests);
+  return `<h3>Test cases<span class="count">${tests.filter(t => t.change?.status !== 'removed').length}</span>${c.add + c.del + c.mod ? `<span class="tsum">${countsHtml(c)}</span>` : ''}</h3>${testList(tests.map(t => ({ t })), true)}`;
+}
+/** The PR summary's "Test changes": every changed test case, and changed code whose tests stayed the same. */
+function testChangesSection() {
+  const changed = D.nodes.filter(t => t.kind === 'test' && t.change);
+  const sameTests = D.checks.tests.filter(x => (x.testCases || []).length && !x.testCases.some(e => byId.get(e.test)?.change));
+  if (!changed.length && !sameTests.length) return '';
+  const c = changeCounts(changed);
+  return `<h3>Test changes<span class="count">${changed.length}</span>${changed.length ? `<span class="tsum">${countsHtml(c)}</span>` : ''}</h3>
+    ${changed.length ? testList(changed.map(t => ({ t })), false) : '<p class="note">No test case changed.</p>'}
+    ${sameTests.length ? `<div class="tgrp">Changed code whose tests didn't change<span class="count">${sameTests.length}</span></div><div class="check">${sameTests.map(x => `<button class="row" data-sym="${esc(x.id)}"><span class="main"><code>${esc(symLabel(x.id))}</code></span><span class="sub">${plural(x.testCases.length, 'test')}, all as before</span></button>`).join('')}</div>` : ''}`;
+}
+
 /* ---------- Symbol focus ---------- */
 function tree(id, dir, depth, seen) {
   if (depth === 0) return '';
@@ -1439,7 +1617,6 @@ function renderSymbol(id) {
   const C = D.checks;
   const ch = n.change;
   const routes = C.affectedRoutes.filter(r => r.changed === id || r.chain.includes(id));
-  const tests = C.tests.find(t => t.id === id);
   const sig = C.signatureChanges.find(s => s.id === id);
   const broken = C.danglingReferences.filter(d => d.from === id || d.to === id);
   const typeOnly = new Set(n.typeUses || []);
@@ -1457,9 +1634,10 @@ function renderSymbol(id) {
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${fc ? `<h3>Circular imports<span class="count ${fcNew ? 'warn' : ''}">${fc.length - 1}</span></h3><p class="note">${fcNew ? 'This PR creates a cycle of imports between this file and these.' : 'This file is part of a cycle of imports that already existed.'}</p><div class="refs">${fc.filter(f => f !== file.path).map(f => symBtn(f)).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
-    ${file && watch && canWhole(file) ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file)}` : ch && ch.hunks.length ? `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
+    ${file && watch && canWhole(file) ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file, false, !file.test)}` : ch && ch.hunks.length ? n.kind === 'test' ? `<details class="whole"><summary>Code diff</summary><div class="sbody">${diffBlock(ch.hunks, n.file, n.id)}</div></details>` : `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
-    ${tests ? `<h3>Tests that reach it<span class="count ${tests.testFiles.length ? '' : 'warn'}">${tests.testFiles.length}</span></h3>${tests.testFiles.length ? `<div class="refs">${tests.testFiles.map(f => symBtn(f)).join('')}</div>` : '<p class="note">No spec file reaches this through references.</p>'}` : ''}
+    ${n.kind === 'test' ? testCaseSection(n) : testsSection(n)}
+    ${file?.test ? specSection(file.path) : ''}
     ${n.injects ? `<h3>Injects</h3><div class="refs">${n.injects.map(i => i.target ? symBtn(i.target, ` · ${esc(i.param)}${i.kind !== 'class' ? ' via ' + esc(i.decorator || 'token') + ' ' + esc(tokenLabel(i.token)) : ''}`) : `<button disabled>${esc(i.param)} <small>${esc(tokenLabel(i.token))}</small></button>`).join('')}</div>` : ''}
     <h3>Called from<span class="count">${n.references.length}</span></h3>
     ${n.references.length ? `<p class="note">Callers, and their callers, up to 3 steps.</p>${tree(id, 'up', 3, new Set([id]))}` : '<p class="note">Nothing references this.</p>'}
