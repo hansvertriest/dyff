@@ -10,7 +10,7 @@ For a PR, dyffle reports:
 - **new module dependencies** and **new circular dependencies** (including `forwardRef`)
 - **new circular imports between files** (runtime imports; type-only imports and tests don't count)
 - **affected routes**: callers are followed upward to HTTP routes, message patterns, GraphQL resolvers, cron jobs and event handlers, e.g. `findOne → OrdersService.createForUser → OrdersController.create → POST /orders/:userId`
-- **test reach**: which spec files reach each changed symbol, and which changed code no test reaches
+- **test reach**: which test cases reach each function, changed or not, described in words (title, suites, assertions) instead of code, and which changed code no test reaches
 
 The analysis uses the TypeScript compiler (via [ts-morph](https://ts-morph.com)), so references are exact: two methods both named `create` are never confused, and path aliases and barrel files are resolved.
 
@@ -187,6 +187,8 @@ dyffle query                                 # a summary of the branch
 dyffle query findOne --index merged.json --json
 ```
 
+`tests` are the test files that reach the node and `testCases` the test cases among them, as `{ test, steps }` nearest first (`steps: 1` when the test calls the node itself). A test case node also has its `testCase` description; the Markdown lists its assertions under **Checks**.
+
 The target is a node id, a `Class.method`, `Class` or function name, or a file path relative to `--root` (`./src/foo.ts` and an absolute path under `--root` work too). A name that matches several nodes lists them with their ids. With no `--index` it reads `.dyffle/live.json` under `--root`, which `dyffle watch` keeps up to date; without that file either it says so and exits with 1, as it does when nothing matches.
 
 | Option | |
@@ -301,12 +303,14 @@ All types of the JSON format are exported (`Index`, `SymbolNode`, `ModuleInfo`, 
 ```ts
 import { query } from 'dyffle';
 
-query(merged, 'UsersService.findOne', { depth: 8 }); // { node, change, callers: { touched, untouched }, calls, routes, tests, broken }
+query(merged, 'UsersService.findOne', { depth: 8 }); // { node, change, callers: { touched, untouched }, calls, routes, tests, testCases, broken }
 query(merged, 'UsersService');                       // a class adds `members`: the same for each of its members
 query(merged, 'src/users/users.service.ts');         // { file: { path, change, imports }, symbols: [...] }, the file node first
 query(merged, 'findOne');                            // several matches: { candidates: [{ id, kind, file }] }
 query(merged);                                       // { summary: { danglingReferences, signatureChanges, newModuleDependencies, newCycles, newFileCycles, untested } }
 ```
+
+`tests` are the test files that reach the node and `testCases` the test cases among them, as `{ test, steps }` nearest first (`steps: 1` when the test calls the node itself). A test case node also has its `testCase` description; the Markdown lists its assertions under **Checks**.
 
 The target is a node id, a `Class.method`, `Class` or function name, a bare member name, or a project-relative file path. It throws when nothing matches, and on a summary of an index without `checks`.
 
@@ -355,6 +359,7 @@ The base index, the overlay and the merged result share one format (`schemaVersi
 - **Ids are stable across branches**: `<file>#<Class>.<member>`, `<file>#<function>`, or `<file>` for top-level code such as imports. Symbols can be matched between `main` and a PR this way.
 - **Node kinds**: `file`, `class`, `method`, `constructor`, `function`, `variable`, `interface`, `type`, `enum`, `route` (a vue-router route) and `test`.
 - **Test cases**: every `it`/`test` call in a test file (`*.spec.ts`, `*.test.ts`, or under `test/`, `tests/`, `__tests__/`) is a node of kind `test`, with id `<file>#<describe> > <describe> > <title>` (a repeated title gets ` (2)`, ` (3)`...). Its `uses` are what its body refers to; setup in `beforeEach` and the like belongs to the file node. `testCase` says what it checks without code: `{ "title": "finds a user", "suites": ["UsersService"], "expects": ["expects service.findOne(1) to equal { id: 1 }"], "mode": "skip" }`. `expects` has one sentence per assertion (Jest/Vitest `expect`, Chai, `node:assert`), and `mode` is `skip`, `only` or `todo` when set.
+- **`testedBy`** (merged only): on each node outside test files, the test cases that reach it through references, nearest first: `[{ "test": "src/users/users.service.spec.ts#UsersService > finds a user", "steps": 1 }]`. `steps` is 1 when the test refers to the node itself. Each entry of `checks.tests` has the same as `testCases`. `testedBy(index)` and `reach(index, id).testCases` compute it.
 - **Modules**: a file belongs to the nearest directory containing a `*.module.ts`. Folders under the AppModule directory without a module of their own (such as `src/common`) become implicit groups with `declared: false`.
 - **NestJS metadata**: `@Module` imports (including `forRoot`/`register` calls and `forwardRef`), custom providers (`provide`/`useClass`/`useFactory`/`useExisting`/`useValue`), constructor injection (`@Inject` tokens, `@InjectRepository`, `@Optional`), `@Controller` prefixes, route decorators and `app.setGlobalPrefix`. String and constant tokens are resolved to the class that provides them.
 - `change` only appears in the overlay and the merged result. A modified node's `hunks` hold only the diff lines inside that node.

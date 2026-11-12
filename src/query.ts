@@ -1,6 +1,6 @@
 import { reach, reachGraph } from './reach.js';
 import { code, routeLabel } from './report.js';
-import type { ChangeStatus, Checks, DanglingReference, FileImport, Index, NodeKind, SignatureChange, SymbolNode } from './schema.js';
+import type { ChangeStatus, Checks, DanglingReference, FileImport, Index, NodeKind, SignatureChange, SymbolNode, TestCase, TestedBy } from './schema.js';
 
 export interface QueryOptions {
   /** How many caller steps to follow for routes and tests. Default 8. */
@@ -26,6 +26,10 @@ export interface NodeImpact {
   routes: { route: string; chain: string[] }[];
   /** Test files whose code reaches this node. */
   tests: string[];
+  /** The test cases among them, nearest first. */
+  testCases: TestedBy[];
+  /** What the node checks, when it is a test case. */
+  testCase?: TestCase;
   /** Dangling references from or to this node. */
   broken: DanglingReference[];
   /**
@@ -99,7 +103,7 @@ function impactOf(index: Index, depth?: number): (n: SymbolNode) => NodeImpact {
   const dangling = index.checks?.danglingReferences ?? [];
 
   const impact = (n: SymbolNode): NodeImpact => {
-    const { routes, testFiles } = reach(index, n.id, { depth, graph });
+    const { routes, testFiles, testCases } = reach(index, n.id, { depth, graph });
     const isTouched = (id: string) => !!graph.byId.get(id)?.change;
     const typeOnly = new Set(n.typeUses);
     const own = members.get(n.id);
@@ -116,6 +120,8 @@ function impactOf(index: Index, depth?: number): (n: SymbolNode) => NodeImpact {
       calls: n.uses.filter((u) => !typeOnly.has(u)),
       routes: routes.map((r) => ({ route: routeLabel(r.route, index.globalPrefix), chain: r.chain })),
       tests: testFiles,
+      testCases,
+      ...(n.testCase ? { testCase: n.testCase } : {}),
       broken: dangling.filter((d) => d.from === n.id || d.to === n.id),
       ...(own ? { members: own.map(impact) } : {}),
     };
@@ -153,6 +159,15 @@ function changeLine(c: NonNullable<NodeImpact['change']>): string {
   return `**Change:** ${c.status}${was}`;
 }
 
+/** A test case as its suites and title, and how far it is from the node. */
+const testLine = (t: TestedBy) => `${code(qualifiedName(t.test))} (${t.steps === 1 ? 'direct' : `${t.steps} steps`})`;
+
+/** Test cases first, then the test files no test case of covers (setup code, helpers). */
+const testItems = (n: NodeImpact) => {
+  const covered = new Set(n.testCases.map((t) => t.test.slice(0, t.test.indexOf('#'))));
+  return [...n.testCases.map(testLine), ...n.tests.filter((f) => !covered.has(f)).map(code)];
+};
+
 /** The lists of one node, callers with untouched first. `empty` names them in a "none" line; an empty name stays out of it. */
 function lists(n: NodeImpact): { title: string; empty: string; items: string[] }[] {
   const { touched, untouched } = n.callers;
@@ -160,7 +175,8 @@ function lists(n: NodeImpact): { title: string; empty: string; items: string[] }
     { title: 'Callers, untouched', empty: touched.length ? 'untouched callers' : 'callers', items: untouched.map(code) },
     { title: 'Callers, touched too', empty: '', items: touched.map(code) },
     { title: 'Routes', empty: 'routes', items: n.routes.map((r) => `**${r.route}** via ${r.chain.map((id) => code(qualifiedName(id))).join(' → ')}`) },
-    { title: 'Tests', empty: 'tests', items: n.tests.map(code) },
+    { title: 'Checks', empty: '', items: n.testCase?.expects ?? [] },
+    { title: 'Tests', empty: 'tests', items: testItems(n) },
     { title: 'Broken references', empty: 'broken references', items: n.broken.map(brokenLine) },
   ];
 }

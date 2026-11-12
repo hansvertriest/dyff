@@ -1,5 +1,5 @@
 import { finalize } from './finalize.js';
-import { reach, reachGraph } from './reach.js';
+import { reach, reachGraph, testedBy } from './reach.js';
 import type { AffectedRoute, Checks, DanglingReference, Index, ModuleEdge, SignatureChange, SymbolNode, TestReach } from './schema.js';
 
 export interface MergeOptions {
@@ -34,7 +34,7 @@ export function merge(base: Index, overlay: Index, opts: MergeOptions = {}): Ind
     nodes: [
       ...base.nodes
         .filter((n) => !touched.has(n.file))
-        .map(({ change: _c, ...n }) => {
+        .map(({ change: _c, testedBy: _t, ...n }) => {
           const c = clone(n);
           c.uses = c.uses.map(remap);
           if (c.typeUses) c.typeUses = c.typeUses.map(remap);
@@ -65,6 +65,11 @@ export function merge(base: Index, overlay: Index, opts: MergeOptions = {}): Ind
   for (const m of merged.modules)
     for (const im of m.imports) if (im.classId) im.classId = remap(im.classId);
   finalize(merged);
+  const tested = testedBy(merged, { depth: opts.depth ?? 8 });
+  for (const n of merged.nodes) {
+    const t = tested.get(n.id);
+    if (t) n.testedBy = t;
+  }
   merged.checks = runChecks(base, merged, touched, opts.depth ?? 8);
   return merged;
 }
@@ -82,7 +87,7 @@ export function rebase(merged: Index, commit?: string): Index {
     kind: 'base',
     generatedAt: new Date().toISOString(),
     files: rest.files.filter((f) => f.change?.status !== 'removed').map(({ change: _c, ...f }) => f),
-    nodes: rest.nodes.filter((n) => n.change?.status !== 'removed').map(({ change: _c, ...n }) => n),
+    nodes: rest.nodes.filter((n) => n.change?.status !== 'removed').map(({ change: _c, testedBy: _t, ...n }) => n),
     modules: rest.modules.filter((m) => m.change?.status !== 'removed').map(({ change: _c, ...m }) => m),
   };
   if (commit) index.commit = commit;
@@ -238,13 +243,13 @@ function runChecks(base: Index, merged: Index, touched: Set<string>, depth: numb
   const tests: TestReach[] = [];
   const untested: string[] = [];
   for (const seed of seeds) {
-    const { routes, testFiles } = reach(merged, seed.id, { depth, graph });
+    const { routes, testFiles, testCases } = reach(merged, seed.id, { depth, graph });
     for (const r of routes) {
       const existing = affected.get(r.routeId);
       if (!existing || existing.chain.length > r.chain.length) affected.set(r.routeId, r);
     }
     if (!CODE_KINDS.has(seed.kind) || seed.change?.status === 'removed') continue;
-    tests.push({ id: seed.id, testFiles });
+    tests.push({ id: seed.id, testFiles, ...(testCases.length ? { testCases } : {}) });
     if (!testFiles.length) untested.push(seed.id);
   }
 

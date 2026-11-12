@@ -205,6 +205,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
   it('reports which changed code tests reach', () => {
     const findOne = merged.checks.tests.find((t) => t.id.endsWith('UsersService.findOne'));
     assert.deepEqual(findOne.testFiles, ['src/users/users.service.spec.ts']);
+    assert.deepEqual(findOne.testCases, [{ test: 'src/users/users.service.spec.ts#UsersService > finds a user', steps: 1 }]);
     assert.ok(merged.checks.untested.includes('src/users/users.service.ts#UsersService.findByEmail'));
   });
 
@@ -221,6 +222,20 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
       'src/reports/reports.controller.ts#ReportsController.user',
     ]);
     assert.deepEqual(testFiles, ['src/users/users.service.spec.ts']);
+  });
+
+  it('gives every node outside test files the test cases that reach it, changed or not', () => {
+    const test = 'src/users/users.service.spec.ts#UsersService > finds a user';
+    assert.deepEqual(node(merged, 'src/users/users.service.ts#UsersService.findOne').testedBy, [{ test, steps: 1 }]);
+    assert.deepEqual(node(merged, 'src/users/users.service.ts#UsersService').testedBy, [{ test, steps: 1 }]);
+    assert.equal(node(merged, test).testedBy, undefined);
+    assert.equal(node(base, 'src/users/users.service.ts#UsersService.findOne').testedBy, undefined);
+    // The same as reach gives node by node.
+    for (const n of merged.nodes) {
+      if (n.test || n.change?.status === 'removed') continue;
+      assert.deepEqual(n.testedBy ?? [], reach(merged, n.id).testCases, n.id);
+    }
+    assert.equal(rebase(merged).nodes.some((n) => n.testedBy), false);
   });
 
   it('reach works on an unchanged symbol of a merged index', () => {
@@ -372,7 +387,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
       assert.ok(md.includes('**Change:** modified, signature changed (was `async (id: number)`)'));
       assert.ok(md.indexOf('**Callers, untouched (2):**') < md.indexOf('**Callers, touched too (2):**'));
       assert.ok(md.includes('- **GET /api/reports/users/:id** via `UsersService.findOne` → `ReportsService.userSummary` → `ReportsController.user`'));
-      assert.ok(md.includes('**Tests (1):**\n- `src/users/users.service.spec.ts`'));
+      assert.ok(md.includes('**Tests (1):**\n- `UsersService > finds a user` (direct)'));
       assert.ok(md.includes('**None:** broken references.'));
       assert.ok(!md.includes('hunks'));
     });
@@ -571,7 +586,7 @@ describe('reach', () => {
   });
 
   it('stops at the depth limit', () => {
-    assert.deepEqual(reach(index, 'a', { depth: 1 }), { routes: [], testFiles: [] });
+    assert.deepEqual(reach(index, 'a', { depth: 1 }), { routes: [], testFiles: [], testCases: [] });
     assert.deepEqual(chains(reach(index, 'a', { depth: 2 })), ['a>b>c']);
     assert.deepEqual(reach(index, 'a', { depth: 2 }).testFiles, []);
     assert.deepEqual(reach(index, 'a', { depth: 3 }).testFiles, ['d.spec.ts']);
