@@ -56,6 +56,8 @@ export interface Change {
   previousId?: string;
   /** A test case's description on the base side, for modified test cases. */
   previousTestCase?: TestCase;
+  /** What a modified test case referred to on the base side (merged only), to tell what its body now reaches or no longer does. */
+  previousUses?: string[];
 }
 
 /** What a test case checks, in words: its title, the suites around it and its assertions. No code. */

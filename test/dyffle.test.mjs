@@ -767,6 +767,64 @@ describe('test cases', () => {
     assert.ok(tc('cart.ts#Cart.count').references.includes(t.id));
     assert.ok(tc('cart.spec.ts').uses.includes('cart.ts#Cart'));
   });
+
+  it('shows a changed test by its description: moved, renamed, rewritten, added and removed', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    try {
+      const spec = (body) => ["import { Cart } from './cart';", "describe('Cart', () => {", '  const cart = new Cart();', ...body, '});', ''].join('\n');
+      writeFileSync(join(repoDir, 'cart.ts'), CART);
+      writeFileSync(join(repoDir, 'cart.spec.ts'), spec([
+        "  it('counts', () => { expect(cart.count()).toBe(2); });",
+        "  it('has nothing', () => { expect(cart.has('x')).toBe(false); });",
+        "  it('totals', () => { expect(cart.total()).toBe(0); });",
+        "  it('is empty', () => { expect(cart.isEmpty()).toBe(true); });",
+        "  it('goes away', () => { expect(1).toBe(1); });",
+        "  describe('checkout', () => {",
+        "    it('throws when empty', async () => { await expect(cart.checkout()).rejects.toThrow(); });",
+        '  });',
+      ]));
+      git(repoDir, 'init', '-q', '-b', 'main');
+      git(repoDir, 'add', '-A');
+      git(repoDir, 'commit', '-qm', 'base');
+      const base = buildBaseIndex({ root: repoDir });
+      git(repoDir, 'checkout', '-qb', 'feature');
+      writeFileSync(join(repoDir, 'cart.spec.ts'), spec([
+        "  it('counts', () => { expect(cart.count()).toBe(2); });",
+        "  it('has no pear', () => { expect(cart.has('x')).toBe(false); });",
+        "  it('sums to zero', () => { expect(cart.isEmpty()).toBe(true); expect(cart.total()).toBe(0); });",
+        "  it.skip('is empty', () => { expect(cart.isEmpty()).toBe(true); });",
+        "  it('is new', () => { cart.add('a', 1); expect(cart.count()).toBe(3); });",
+        "  describe('checkout', () => {",
+        '  });',
+        "  describe('paying', () => {",
+        "    it('throws when empty', async () => { await expect(cart.checkout()).rejects.toThrow(); });",
+        '  });',
+      ]));
+      git(repoDir, 'commit', '-qam', 'change');
+      const merged = merge(base, buildOverlay({ root: repoDir, baseRef: 'main' }));
+      const changes = Object.fromEntries(
+        merged.nodes.filter((n) => n.kind === 'test' && n.change).map((n) => [n.id.slice(n.id.indexOf('#') + 1), [n.change.status, n.change.previousId?.slice(n.change.previousId.indexOf('#') + 1) ?? null]]),
+      );
+      assert.deepEqual(changes, {
+        'Cart > has no pear': ['modified', 'Cart > has nothing'], // same assertions
+        'Cart > sums to zero': ['modified', 'Cart > totals'], // same place in the suite
+        'Cart > is empty': ['modified', null],
+        'Cart > is new': ['added', null],
+        'Cart > goes away': ['removed', null],
+        'Cart > paying > throws when empty': ['modified', 'Cart > checkout > throws when empty'], // same title
+      });
+      const t = (id) => merged.nodes.find((n) => n.id === 'cart.spec.ts#' + id);
+      assert.deepEqual(t('Cart > sums to zero').change.previousTestCase, { title: 'totals', suites: ['Cart'], expects: ['expects cart.total() to be 0'] });
+      assert.deepEqual(t('Cart > sums to zero').testCase.expects, ['expects cart.isEmpty() to be true', 'expects cart.total() to be 0']);
+      assert.deepEqual(t('Cart > sums to zero').change.previousUses, ['cart.ts#Cart.total']);
+      assert.deepEqual(t('Cart > sums to zero').uses, ['cart.ts#Cart.isEmpty', 'cart.ts#Cart.total']);
+      assert.equal(t('Cart > is empty').testCase.mode, 'skip');
+      assert.equal(t('Cart > is empty').change.previousTestCase.mode, undefined);
+      assert.deepEqual(t('Cart > paying > throws when empty').change.previousTestCase.suites, ['Cart', 'checkout']);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('files with syntax errors', () => {

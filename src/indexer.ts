@@ -3,7 +3,7 @@ import { Analyzer, type FileAnalysis, type ProjectOptions } from './analyzer.js'
 import { deletedText, filterHunks, hunksWithin, parseUnifiedDiff, reverseApply, sliceHunks, type DiffFile } from './diff.js';
 import { finalize, moduleAssigner } from './finalize.js';
 import { diffAgainst, headCommit, mergeBase, showFile } from './git.js';
-import { SCHEMA_VERSION, type FileInfo, type Index, type IndexKind, type PrInfo, type SymbolNode } from './schema.js';
+import { SCHEMA_VERSION, type FileInfo, type Index, type IndexKind, type PrInfo, type SymbolNode, type TestCase } from './schema.js';
 import { collectFile, compactSignature } from './symbols.js';
 import { isVueFile, parseSource, vueBlockLines } from './vue.js';
 
@@ -60,6 +60,46 @@ export interface OverlayOptions extends ProjectOptions {
   /** A program already loaded for this working tree, to reuse instead of loading it again. */
   analyzer?: Analyzer;
   log?: Logger;
+}
+
+type OldNode = Omit<SymbolNode, 'module' | 'uses' | 'references'>;
+
+/**
+ * Match test cases the change removed to ones it added, so a test that got a new title or moved to
+ * another describe block shows as changed rather than as one removed and one added. In order: the
+ * same title (moved), the same suites and assertions (renamed), the same suites and place among
+ * that suite's tests with an assertion or title word in common (rewritten). New id -> key of the base-side node in `removed`.
+ */
+function pairTestCases(added: SymbolNode[], removedEntries: [string, OldNode][]): Map<string, string> {
+  const pairs = new Map<string, string>();
+  const removed = removedEntries.map(([key, o]) => ({ ...o, id: key }));
+  const suite = (t: { testCase?: TestCase }) => JSON.stringify(t.testCase?.suites ?? []);
+  const place = (list: { testCase?: TestCase; id: string }[]) => {
+    const seen = new Map<string, number>();
+    return new Map(list.map((t) => [t.id, seen.set(suite(t), (seen.get(suite(t)) ?? -1) + 1).get(suite(t))!]));
+  };
+  // At the same place, a test is only the same one when it keeps an assertion or a word of its title.
+  const titleWords = (t?: TestCase) => new Set((t?.title.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []));
+  const alike = (a?: TestCase, b?: TestCase) =>
+    !!a?.expects.some((e) => b?.expects.includes(e)) || [...titleWords(a)].some((w) => titleWords(b).has(w));
+  const newPlace = place(added);
+  const oldPlace = place(removed);
+  const rules: ((n: SymbolNode, o: (typeof removed)[number]) => boolean)[] = [
+    (n, o) => n.testCase?.title === o.testCase?.title,
+    (n, o) => suite(n) === suite(o) && !!n.testCase?.expects.length && JSON.stringify(n.testCase.expects) === JSON.stringify(o.testCase?.expects),
+    (n, o) => suite(n) === suite(o) && newPlace.get(n.id) === oldPlace.get(o.id) && alike(n.testCase, o.testCase),
+  ];
+  const taken = new Set<string>();
+  for (const rule of rules) {
+    for (const n of added) {
+      if (pairs.has(n.id)) continue;
+      const fits = removed.filter((o) => !taken.has(o.id) && rule(n, o));
+      if (fits.length !== 1) continue;
+      pairs.set(n.id, fits[0].id);
+      taken.add(fits[0].id);
+    }
+  }
+  return pairs;
 }
 
 const TS_FILE = /\.[cm]?tsx?$/;
@@ -176,14 +216,21 @@ export function buildOverlay(opts: OverlayOptions): Index {
         const hunks = hunksWithin(df.hunks, ranges(newBlocks), ranges(oldBlocks));
         if (hunks.length) (fileChange.sections ??= []).push({ name: tag, hunks });
       }
+      const newIds = new Set(added.map((n) => n.id));
+      const pairedTests = pairTestCases(
+        added.filter((n) => n.kind === 'test' && !oldNodes.has(n.id)),
+        [...oldNodes].filter(([key, o]) => o.kind === 'test' && !newIds.has(key)),
+      );
       for (const n of added) {
-        const old = oldNodes.get(n.id);
-        oldNodes.delete(n.id);
+        const key = oldNodes.has(n.id) ? n.id : pairedTests.get(n.id);
+        const old = key === undefined ? undefined : oldNodes.get(key);
+        if (key !== undefined) oldNodes.delete(key);
         if (!old) {
           n.change = { status: 'added', hunks: hunksOf(n) };
           continue;
         }
-        if (old.hash === n.hash) continue;
+        // A test case that only moved to another describe block has the same text, but is still a change.
+        if (old.hash === n.hash && !pairedTests.has(n.id)) continue;
         const renamedFrom = old.id !== n.id ? { previousId: old.id } : {};
         const sigChanged = compactSignature(old.signature) !== compactSignature(n.signature);
         n.change = {
@@ -192,6 +239,7 @@ export function buildOverlay(opts: OverlayOptions): Index {
           previousRange: old.range,
           ...renamedFrom,
           ...(sigChanged ? { signatureChanged: true, previousSignature: old.signature ?? '' } : {}),
+          ...(old.testCase ? { previousTestCase: old.testCase } : {}),
         };
       }
       for (const m of index.modules.slice(index.modules.length - r.modules.length)) {
