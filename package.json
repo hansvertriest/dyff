@@ -36,6 +36,7 @@
   },
   "files": [
     "dist",
+    "!dist/*.test.*",
     "viewer",
     "README.md",
     "LICENSE"
@@ -45,7 +46,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/*.test.mjs",
+    "test": "npm run build && node --test test/*.test.mjs dist/*.test.js",
     "prepublishOnly": "npm test"
   },
   "dependencies": {

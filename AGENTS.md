@@ -27,6 +27,7 @@ Every file has one concern. The layers below only import from the layers above t
 | | `git.ts` | Every call to `git`. Nothing else spawns git. |
 | Framework knowledge | `nest.ts` | NestJS: `@Module`, providers, injection, routes. |
 | | `vue.ts` | Vue SFCs: blocks, template references, vue-router routes. |
+| | `tests.ts` | Test frameworks: `describe`/`it`/`test` calls and their assertions, in words. |
 | | `symbols.ts` | Collecting the symbol nodes of one source file. |
 | Analysis | `analyzer.ts` | `Analyzer`: a loaded ts-morph program and per-file analysis (uses, type uses, imports). |
 | | `finalize.ts` | Derived data on an index: module assignment, reverse references. |
@@ -65,7 +66,8 @@ Rules that follow from this:
 
 ## Tests
 
-- `npm test` builds and runs `node --test test/*.test.mjs` against `dist/`. Run it after every change.
+- `npm test` builds and runs `node --test test/*.test.mjs dist/*.test.js` against `dist/`. Run it after every change.
+- Unit tests of one module can live next to it in `src/<module>.test.ts` (as `src/tests.test.ts` does). They are TypeScript, so dyffle indexes them as test cases of its own code; they compile to `dist/` but are left out of the package.
 - Tests live in `test/dyffle.test.mjs`, one `describe` per feature, and use real git repositories made in a temp dir from `test/fixtures/` (`nest-app/base` → `pr`, `vue-app/base` → `pr`). Add to the fixtures rather than mocking.
 - A new feature or a behavior change comes with a test in its `describe`.
 

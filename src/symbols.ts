@@ -2,6 +2,7 @@ import { ts } from 'ts-morph';
 import { decoratorName, decoratorsOf, hash, nameOf } from './ast.js';
 import { nestRoutes } from './nest.js';
 import type { NodeKind, SymbolNode } from './schema.js';
+import { collectTests } from './tests.js';
 import { collectVueRoutes } from './vue.js';
 
 /** A node as collected from one file, before references are resolved. */
@@ -62,16 +63,26 @@ export function isTestFile(path: string): boolean {
   return /\.(spec|test|e2e-spec|e2e)\.[cm]?tsx?$/.test(path) || /(^|\/)(test|tests|__tests__)\//.test(path);
 }
 
+/** Id of a test case: its suites and title joined with " > ", made unique within the file with " (2)", " (3)"... */
+function testId(path: string, suites: string[], title: string, taken: Set<string>): string {
+  const base = `${path}#${[...suites, title].join(' > ')}`;
+  let id = base;
+  for (let i = 2; taken.has(id); i++) id = `${base} (${i})`;
+  taken.add(id);
+  return id;
+}
+
 /**
  * Collect the declarations of one file: classes and their members, functions,
- * top-level variables, interfaces, types and enums. Works without a type checker.
+ * top-level variables, interfaces, types and enums, and in a test file its test
+ * cases. Works without a type checker.
  */
 export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
   const nodes: CollectedNode[] = [];
   const byDecl = new Map<ts.Node, string>();
   const ids = new Map<string, CollectedNode>();
   const test = isTestFile(path);
-  const topLevelOther: string[] = [];
+  const topLevelOther: [string, number][] = [];
 
   const add = (decl: ts.Node, kind: NodeKind, name: string, extra: Partial<CollectedNode> = {}, parent?: string) => {
     const id = parent ? `${parent}.${name}` : `${path}#${name}`;
@@ -163,7 +174,7 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
         }
         if (declNode !== d) byDecl.set(d, byDecl.get(declNode)!);
       }
-      if (!any) topLevelOther.push(st.getText(sf));
+      if (!any) topLevelOther.push([st.getText(sf), st.getStart(sf)]);
     } else if (ts.isInterfaceDeclaration(st)) {
       add(st, 'interface', st.name.text, { exported });
     } else if (ts.isTypeAliasDeclaration(st)) {
@@ -171,13 +182,45 @@ export function collectFile(sf: ts.SourceFile, path: string): FileSymbols {
     } else if (ts.isEnumDeclaration(st)) {
       add(st, 'enum', st.name.text, { exported });
     } else {
-      topLevelOther.push(st.getText(sf));
+      topLevelOther.push([st.getText(sf), st.getStart(sf)]);
     }
   }
 
   collectVueRoutes(sf, add);
 
-  const fileHash = hash(topLevelOther.join('\n'));
+  // Test cases are nodes of their own, so the file's hash leaves their text out.
+  const testSpans: [number, number][] = [];
+  if (test) {
+    const taken = new Set(nodes.map((n) => n.id));
+    for (const { call, testCase } of collectTests(sf)) {
+      const id = testId(path, testCase.suites, testCase.title, taken);
+      const node: CollectedNode = {
+        id,
+        kind: 'test',
+        name: testCase.title,
+        file: path,
+        range: [lineOf(sf, call.getStart(sf)), lineOf(sf, call.getEnd())],
+        hash: hash(call.getText(sf)),
+        decl: call,
+        test,
+        testCase,
+      };
+      byDecl.set(call, id);
+      nodes.push(node);
+      testSpans.push([call.getStart(sf), call.getEnd()]);
+    }
+  }
+  const withoutTests = (text: string, start: number) => {
+    let out = '';
+    let at = start;
+    for (const [s, e] of testSpans) {
+      if (s < at || e > start + text.length) continue;
+      out += text.slice(at - start, s - start);
+      at = e;
+    }
+    return out + text.slice(at - start);
+  };
+  const fileHash = hash(topLevelOther.map(([text, start]) => withoutTests(text, start)).join('\n'));
   const fileNode: CollectedNode = {
     id: path,
     kind: 'file',

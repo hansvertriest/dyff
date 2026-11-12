@@ -101,7 +101,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
       'src/orders/orders.service.ts#OrdersService.createForUser', // imported via the ../users barrel
       'src/reports/reports.service.ts#ReportsService.userSummary', // imported via the @app/* alias
       'src/users/users.controller.ts#UsersController.findOne',
-      'src/users/users.service.spec.ts',
+      'src/users/users.service.spec.ts#UsersService > finds a user', // a test case is a node of its own
     ]);
     // References that only appear in type annotations are marked as such.
     const create = node(base, 'src/orders/orders.controller.ts#OrdersController.create');
@@ -179,7 +179,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
 
   it('lists callers outside the PR for changed signatures', () => {
     const sig = merged.checks.signatureChanges.find((s) => s.id.endsWith('UsersService.findOne'));
-    assert.deepEqual(sig.callersOutsidePr, ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts']);
+    assert.deepEqual(sig.callersOutsidePr, ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts#UsersService > finds a user']);
     assert.ok(sig.callersInPr.includes('src/orders/orders.service.ts#OrdersService.createForUser'));
   });
 
@@ -238,7 +238,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
     assert.deepEqual(r.change, { status: 'modified', signatureChanged: true, previousSignature: 'async (id: number)' });
     assert.deepEqual(r.callers, {
       touched: ['src/orders/orders.service.ts#OrdersService.createForUser', 'src/users/users.controller.ts#UsersController.findOne'],
-      untouched: ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts'],
+      untouched: ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts#UsersService > finds a user'],
     });
     assert.ok(r.routes.some((x) => x.route === 'GET /api/reports/users/:id' && x.chain.at(-1) === 'src/reports/reports.controller.ts#ReportsController.user'));
     assert.deepEqual(r.tests, ['src/users/users.service.spec.ts']);
@@ -333,7 +333,7 @@ describe('NestJS fixture: base index, PR overlay, merge', () => {
       id: 'src/users/users.service.ts#UsersService.findOne',
       before: 'async (id: number)',
       after: 'async (id: number, withOrders = false)',
-      callersOutsidePr: ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts'],
+      callersOutsidePr: ['src/reports/reports.service.ts#ReportsService.userSummary', 'src/users/users.service.spec.ts#UsersService > finds a user'],
     }]);
   });
 
@@ -667,6 +667,90 @@ describe('circular file imports', () => {
     assert.deepEqual(merged.checks.fileCycles, [['src/a.ts', 'src/b2.ts'], ['src/c.ts', 'src/d.ts']]);
     assert.deepEqual(merged.checks.newFileCycles, [['src/c.ts', 'src/d.ts']]);
     assert.match(markdownReport(merged), /New circular file imports[\s\S]*src\/c\.ts/);
+  });
+});
+
+describe('test cases', () => {
+  let dir, index;
+  const SPEC = [
+    "import assert from 'node:assert/strict';",
+    "import { Cart } from './cart';",
+    '',
+    "describe('Cart', () => {",
+    '  let cart: Cart;',
+    '  beforeEach(() => { cart = new Cart(); });',
+    "  it('adds an item', async () => {",
+    "    cart.add('apple', 2);",
+    '    expect(cart.count()).toBe(2);',
+    "    expect(cart.has('pear')).not.toBe(true);",
+    '    await expect(cart.checkout()).rejects.toThrow(EmptyError);',
+    '  });',
+    "  describe('total', () => {",
+    "    it.skip('sums prices', () => { assert.equal(cart.total(), 0); assert.ok(cart.isEmpty()); });",
+    "    it.todo('applies discounts');",
+    "    test('sums prices', () => {});",
+    '  });',
+    '});',
+    '',
+  ].join('\n');
+  const CART = [
+    'export class EmptyError extends Error {}',
+    'export class Cart {',
+    '  add(name: string, qty: number) {}',
+    '  count() { return 2; }',
+    '  has(name: string) { return false; }',
+    '  total() { return 0; }',
+    '  isEmpty() { return true; }',
+    '  async checkout() { throw new EmptyError(); }',
+    '}',
+    '',
+  ].join('\n');
+  const tc = (id) => index.nodes.find((n) => n.id === id);
+
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'dyffle-'));
+    writeFileSync(join(dir, 'cart.ts'), CART);
+    writeFileSync(join(dir, 'cart.spec.ts'), SPEC);
+    index = buildBaseIndex({ root: dir });
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('makes a node of each it and test call, with its suites in the id', () => {
+    assert.deepEqual(
+      index.nodes.filter((n) => n.kind === 'test').map((n) => n.id),
+      [
+        'cart.spec.ts#Cart > adds an item',
+        'cart.spec.ts#Cart > total > sums prices',
+        'cart.spec.ts#Cart > total > applies discounts',
+        'cart.spec.ts#Cart > total > sums prices (2)',
+      ],
+    );
+    const t = tc('cart.spec.ts#Cart > adds an item');
+    assert.equal(t.name, 'adds an item');
+    assert.equal(t.test, true);
+    assert.deepEqual(t.range, [7, 12]);
+  });
+
+  it('describes the assertions in words', () => {
+    assert.deepEqual(tc('cart.spec.ts#Cart > adds an item').testCase, {
+      title: 'adds an item',
+      suites: ['Cart'],
+      expects: ['expects cart.count() to be 2', "expects cart.has('pear') not to be true", 'expects cart.checkout() to reject with EmptyError'],
+    });
+    assert.deepEqual(tc('cart.spec.ts#Cart > total > sums prices').testCase, {
+      title: 'sums prices',
+      suites: ['Cart', 'total'],
+      expects: ['expects cart.total() to equal 0', 'expects cart.isEmpty()'],
+      mode: 'skip',
+    });
+    assert.equal(tc('cart.spec.ts#Cart > total > applies discounts').testCase.mode, 'todo');
+  });
+
+  it('resolves what a test case refers to, and leaves setup to the file', () => {
+    const t = tc('cart.spec.ts#Cart > adds an item');
+    assert.deepEqual(t.uses, ['cart.ts#Cart.add', 'cart.ts#Cart.checkout', 'cart.ts#Cart.count', 'cart.ts#Cart.has']);
+    assert.ok(tc('cart.ts#Cart.count').references.includes(t.id));
+    assert.ok(tc('cart.spec.ts').uses.includes('cart.ts#Cart'));
   });
 });
 

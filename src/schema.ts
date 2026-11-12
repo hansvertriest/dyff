@@ -21,7 +21,9 @@ export type NodeKind =
   | 'type'
   | 'enum'
   /** A vue-router route record. */
-  | 'route';
+  | 'route'
+  /** A test case: an `it` or `test` call in a test file. */
+  | 'test';
 
 export type ChangeStatus = 'added' | 'modified' | 'removed';
 
@@ -50,8 +52,30 @@ export interface Change {
   previousSignature?: string;
   /** Line range on the base side, for modified and removed nodes. */
   previousRange?: [number, number];
-  /** Id on the base side when the file was renamed. */
+  /** Id on the base side when the file was renamed, or when a test case kept its body but got a new title. */
   previousId?: string;
+  /** A test case's description on the base side, for modified test cases. */
+  previousTestCase?: TestCase;
+}
+
+/** What a test case checks, in words: its title, the suites around it and its assertions. No code. */
+export interface TestCase {
+  /** The test's own title. */
+  title: string;
+  /** Titles of the enclosing `describe` blocks, outermost first. */
+  suites: string[];
+  /** One plain sentence per assertion, in source order (e.g. "expects service.findOne(1) to equal { id: 1 }"). */
+  expects: string[];
+  /** Set when the test is skipped, focused or only a placeholder. */
+  mode?: 'skip' | 'only' | 'todo';
+}
+
+/** A test case that reaches a node through references. */
+export interface TestedBy {
+  /** Id of the test case node. */
+  test: string;
+  /** Reference steps from the test to the node: 1 when the test refers to it itself. */
+  steps: number;
 }
 
 /** An entry point: an HTTP route, message pattern, GraphQL operation, schedule, event handler or vue-router page. */
@@ -106,6 +130,10 @@ export interface SymbolNode {
   references: string[];
   /** Set when the node lives in a test file. */
   test?: boolean;
+  /** The description of a test case node (kind "test"). */
+  testCase?: TestCase;
+  /** Test cases that reach this node, nearest first. Only in a merged index, and only on nodes outside test files. */
+  testedBy?: TestedBy[];
   change?: Change;
 }
 
@@ -233,6 +261,8 @@ export interface TestReach {
   id: string;
   /** Test files whose code reaches this symbol through references. */
   testFiles: string[];
+  /** The test cases among them that reach it, nearest first. */
+  testCases?: TestedBy[];
 }
 
 export interface Checks {
