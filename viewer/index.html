@@ -124,6 +124,7 @@ main{--w1:500px;--w2:440px;flex:1;min-height:0;display:grid;grid-template-column
 .node .nv path{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linejoin:round}
 .node .nv circle{fill:var(--accent)}
 .node .meta .a{fill:var(--add)} .node .meta .d{fill:var(--del)} .node .meta .w{fill:var(--del)}
+.node .tr{font:500 11.5px var(--sans);fill:var(--muted)} .node .tr .w{fill:var(--del)} .node .tr .t{fill:var(--mod)}
 .node:focus{outline:none}
 .node:focus-visible rect.box{stroke:var(--accent);stroke-width:2}
 .edge{fill:none;stroke:var(--edge);stroke-width:1.4}
@@ -533,6 +534,7 @@ function build() {
   const newFileCycle = new Set((C.newFileCycles || []).map(c => c.join('|')));
   const fileCycleState = (a, b) => !fcyc.has(a) || fcyc.get(a) !== fcyc.get(b) ? false : newFileCycle.has(C.fileCycles[fcyc.get(a)].join('|')) ? 'new' : 'old';
   M = { nodes, edges, cycleState, fileCycleState };
+  H = hasTestCases() ? 108 : 78;
 }
 
 /* ---------- The folder map ---------- */
@@ -620,6 +622,7 @@ function fileGraph(folder) {
     n.adds = fs.reduce((a, f) => a + (f.change?.additions || 0), 0);
     n.dels = fs.reduce((a, f) => a + (f.change?.deletions || 0), 0);
     n.warn = fs.reduce((a, f) => a + (warns.get(f.path) || 0), 0);
+    if (hasTestCases()) n.tstat = testStats(fs.filter(f => !f.test).flatMap(f => (nodesByFile.get(f.path) || []).filter(isFn)));
   }
   markUnviewed(nodes);
   // A link between two boxes stands for all file imports between them; each import is a pair, seen
@@ -709,7 +712,9 @@ const graph = () => FG && FG.folder === folder && FG.tests === showTests ? FG : 
 const folderFor = dir => compact(dir !== undefined && dir !== null && under(dir + '/', projectRoot) ? dir : projectRoot);
 
 /* ---------- Graph ---------- */
-const W = 232, H = 78, CG = 92, RG = 22, PAD = 28;
+const W = 232, CG = 92, RG = 22, PAD = 28;
+/** Box height: two more lines for the test rollup when the dyffle knows test cases. */
+let H = 78;
 function visibleIds() {
   const G = graph(), ids = new Set();
   // What the PR changed, uses changed code, changed a link or has a new cycle in it; the rest of the
@@ -759,6 +764,11 @@ function layout(ids) {
   return { pos, col, bottom, width: PAD * 2 + cols.length * (W + CG) - CG, height: PAD * 2 + fullH + 30 };
 }
 const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+/** A box's test rollup, two lines under its meta: behaviours and changed ones, then its gaps. */
+function testRollup(t) {
+  const gaps = [t.untested && `<tspan class="w">${t.untested} untested</tspan>`, t.through && `<tspan class="t">${t.through} only via callers</tspan>`].filter(Boolean).join('  ');
+  return `<text class="tr" x="18" y="84">${plural(t.behaviours, 'behaviour')}${t.changed ? `  <tspan class="t">${t.changed} changed</tspan>` : ''}</text>${gaps ? `<text class="tr" x="18" y="100">${gaps}</text>` : ''}`;
+}
 const clipStart = (s, n) => s.length > n ? '…' + s.slice(s.length - n + 1) : s;
 let hot = new Set(), hoverMod = null, boxPos = new Map();
 function renderGraph() {
@@ -830,7 +840,7 @@ function renderGraph() {
       <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
       ${n.dir ? `<path class="fold" d="M18 13h5l2 2h7v8h-14z"/>` : ''}<text class="nm" x="${n.dir ? 38 : 18}" y="25">${esc(n.dir ? clipStart(n.name, nameLen) : clip(n.name, nameLen))}</text>${tag ? `<text class="tag" x="${W - 12}" y="24" text-anchor="end">${tag}</text>` : ''}
       <text class="pth" x="18" y="44">${esc(clip(n.sub ?? n.id, 29))}</text>
-      <text class="meta" x="18" y="64">${meta}</text>${eye}<title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
+      <text class="meta" x="18" y="64">${meta}</text>${n.tstat?.fns ? testRollup(n.tstat) : ''}${eye}<title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
   cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="Files in ${esc(folderName(folder))}">
