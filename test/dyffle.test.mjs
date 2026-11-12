@@ -818,6 +818,8 @@ describe('test cases', () => {
       assert.deepEqual(t('Cart > sums to zero').testCase.expects, ['expects cart.isEmpty() to be true', 'expects cart.total() to be 0']);
       assert.deepEqual(t('Cart > sums to zero').change.previousUses, ['cart.ts#Cart.total']);
       assert.deepEqual(t('Cart > sums to zero').uses, ['cart.ts#Cart.isEmpty', 'cart.ts#Cart.total']);
+      assert.deepEqual(t('Cart > goes away').change.previousUses, []);
+      assert.deepEqual(t('Cart > has no pear').change.previousUses, ['cart.ts#Cart.has']);
       assert.equal(t('Cart > is empty').testCase.mode, 'skip');
       assert.equal(t('Cart > is empty').change.previousTestCase.mode, undefined);
       assert.deepEqual(t('Cart > paying > throws when empty').change.previousTestCase.suites, ['Cart', 'checkout']);

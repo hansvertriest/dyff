@@ -62,10 +62,10 @@ export function merge(base: Index, overlay: Index, opts: MergeOptions = {}): Ind
     if (!old) continue;
     f.change.previousImports = clone(old.imports).map((im) => (im.resolved ? { ...im, resolved: renamedFile.get(im.resolved) ?? im.resolved } : im));
   }
-  // Keep what each changed test case referred to before, so a body-only change can be told in words.
+  // Keep what each changed or removed test case referred to before, to tell a body-only change in words and what a removed test covered.
   const baseNodes = new Map(base.nodes.map((n) => [n.id, n]));
   for (const n of merged.nodes) {
-    if (n.kind !== 'test' || n.change?.status !== 'modified') continue;
+    if (n.kind !== 'test' || (n.change?.status !== 'modified' && n.change?.status !== 'removed')) continue;
     const old = baseNodes.get(n.change.previousId ?? n.id);
     if (old) n.change.previousUses = old.uses.map(remap);
   }

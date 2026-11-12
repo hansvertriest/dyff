@@ -66,38 +66,42 @@ type OldNode = Omit<SymbolNode, 'module' | 'uses' | 'references'>;
 
 /**
  * Match test cases the change removed to ones it added, so a test that got a new title or moved to
- * another describe block shows as changed rather than as one removed and one added. In order: the
- * same title (moved), the same suites and assertions (renamed), the same suites and place among
- * that suite's tests with an assertion or title word in common (rewritten). New id -> key of the base-side node in `removed`.
+ * another describe block shows as changed rather than as one removed and one added. A pair needs
+ * the same title, an assertion in common, or the same place in the same suite with a title word in
+ * common; the best scoring pairs win. New id -> key of the base-side node in `removedEntries`.
  */
 function pairTestCases(added: SymbolNode[], removedEntries: [string, OldNode][]): Map<string, string> {
-  const pairs = new Map<string, string>();
-  const removed = removedEntries.map(([key, o]) => ({ ...o, id: key }));
-  const suite = (t: { testCase?: TestCase }) => JSON.stringify(t.testCase?.suites ?? []);
-  const place = (list: { testCase?: TestCase; id: string }[]) => {
+  const removed = removedEntries.map(([key, o]) => ({ key, tc: o.testCase }));
+  const fresh = added.map((n) => ({ key: n.id, tc: n.testCase }));
+  const suite = (tc?: TestCase) => JSON.stringify(tc?.suites ?? []);
+  const place = (list: { key: string; tc?: TestCase }[]) => {
     const seen = new Map<string, number>();
-    return new Map(list.map((t) => [t.id, seen.set(suite(t), (seen.get(suite(t)) ?? -1) + 1).get(suite(t))!]));
+    return new Map(list.map(({ key, tc }) => [key, seen.set(suite(tc), (seen.get(suite(tc)) ?? -1) + 1).get(suite(tc))!]));
   };
-  // At the same place, a test is only the same one when it keeps an assertion or a word of its title.
-  const titleWords = (t?: TestCase) => new Set((t?.title.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []));
-  const alike = (a?: TestCase, b?: TestCase) =>
-    !!a?.expects.some((e) => b?.expects.includes(e)) || [...titleWords(a)].some((w) => titleWords(b).has(w));
-  const newPlace = place(added);
+  const newPlace = place(fresh);
   const oldPlace = place(removed);
-  const rules: ((n: SymbolNode, o: (typeof removed)[number]) => boolean)[] = [
-    (n, o) => n.testCase?.title === o.testCase?.title,
-    (n, o) => suite(n) === suite(o) && !!n.testCase?.expects.length && JSON.stringify(n.testCase.expects) === JSON.stringify(o.testCase?.expects),
-    (n, o) => suite(n) === suite(o) && newPlace.get(n.id) === oldPlace.get(o.id) && alike(n.testCase, o.testCase),
-  ];
+  const words = (tc?: TestCase) => new Set(tc?.title.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []);
+  const score = (n: (typeof fresh)[number], o: (typeof removed)[number]): number => {
+    const a = n.tc, b = o.tc;
+    if (!a || !b) return 0;
+    const sameTitle = a.title === b.title;
+    const sharedExpects = a.expects.filter((e) => b.expects.includes(e)).length;
+    const sharedWords = [...words(a)].filter((w) => words(b).has(w)).length;
+    const sameSuite = suite(a) === suite(b);
+    const samePlace = sameSuite && newPlace.get(n.key) === oldPlace.get(o.key);
+    if (!sameTitle && !sharedExpects && !(samePlace && sharedWords)) return 0;
+    return (sameTitle ? 100 : 0) + sharedExpects * 20 + (sameSuite ? 5 : 0) + (samePlace ? 3 : 0) + sharedWords * 2;
+  };
+  const candidates = fresh
+    .flatMap((n) => removed.map((o) => ({ n: n.key, o: o.key, s: score(n, o) })))
+    .filter((c) => c.s > 0)
+    .sort((x, y) => y.s - x.s);
+  const pairs = new Map<string, string>();
   const taken = new Set<string>();
-  for (const rule of rules) {
-    for (const n of added) {
-      if (pairs.has(n.id)) continue;
-      const fits = removed.filter((o) => !taken.has(o.id) && rule(n, o));
-      if (fits.length !== 1) continue;
-      pairs.set(n.id, fits[0].id);
-      taken.add(fits[0].id);
-    }
+  for (const c of candidates) {
+    if (pairs.has(c.n) || taken.has(c.o)) continue;
+    pairs.set(c.n, c.o);
+    taken.add(c.o);
   }
   return pairs;
 }
