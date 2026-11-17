@@ -426,6 +426,7 @@ details.file>summary.fhead:hover{background:var(--line)}
 .rowlink{fill:none;stroke:var(--accent);stroke-width:2;pointer-events:none}
 details.sym.focus{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
 details.sym.focus>summary .sname{color:var(--accent)}
+.lareas{color:var(--muted);margin-left:6px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -599,16 +600,60 @@ function compact(dir) {
   return d;
 }
 const folderName = dir => dir === projectRoot ? baseOf(D.root) : relTo(dir, projectRoot) + '/';
+const AREA_MAX = 6;
+/** The box a path inside `folder` goes to, with the folders in `split` opened one level further. */
+function innerKey(path, folder, split) {
+  let d = folder;
+  for (;;) {
+    const rest = relTo(path, d), i = rest.indexOf('/');
+    if (i < 0) return path;
+    const sub = compact((d ? d + '/' : '') + rest.slice(0, i));
+    if (!split.has(sub)) return 'dir:' + sub;
+    d = sub;
+  }
+}
+/**
+ * Change areas: when a folder's changes sit deep in subfolders, its busiest box whose changes are all
+ * in subfolders is opened one level, again and again while the map keeps about AREA_MAX changed boxes.
+ * Chains of single folders still join into one box (`compact`). Returns the folders opened.
+ */
+function changeAreas(folder) {
+  const split = new Set();
+  const changed = D.files.filter(f => f.change && (showTests || !f.test) && under(f.path, folder));
+  const boxes = () => {
+    const m = new Map();
+    for (const f of changed) { const k = innerKey(f.path, folder, split); if (!m.has(k)) m.set(k, []); m.get(k).push(f); }
+    return m;
+  };
+  for (let cur = boxes(); cur.size < AREA_MAX;) {
+    const size = fs => fs.reduce((a, f) => a + f.change.additions + f.change.deletions, 0);
+    // A folder box can open when none of its changed files sits in the folder itself.
+    const cands = [...cur].filter(([k, fs]) => k.startsWith('dir:') && fs.every(f => dirOf(f.path) !== k.slice(4))).sort((a, b) => size(b[1]) - size(a[1]));
+    let done = true;
+    for (const [k] of cands) {
+      split.add(k.slice(4));
+      const next = boxes();
+      if (next.size <= AREA_MAX && next.size > cur.size) { cur = next; done = false; break; }
+      split.delete(k.slice(4));
+    }
+    if (done) break;
+  }
+  return split;
+}
+/** A box's name: its path from the folder it was opened from, with that folder's own name in front. */
+function areaName(dir, folder, split) {
+  let from = folder;
+  for (const d of split) if (under(dir, d) && d.length > from.length) from = d;
+  return (from !== folder ? baseOf(from) + '/' : '') + relTo(dir, from) + '/';
+}
 function fileGraph(folder) {
   const nodes = new Map(), edges = new Map();
   const shown = f => f && (showTests || !f.test);
+  const split = changeAreas(folder);
   const keyOf = path => {
     const f = fileByPath.get(path);
     if (!f) return null;
-    if (under(path, folder)) {
-      const rest = relTo(path, folder), i = rest.indexOf('/');
-      return i < 0 ? path : 'dir:' + compact((folder ? folder + '/' : '') + rest.slice(0, i));
-    }
+    if (under(path, folder)) return innerKey(path, folder, split);
     // Outside the current folder: the folder (or file) where its path leaves the current one.
     const a = folder.split('/'), b = path.split('/');
     let k = 0;
@@ -631,7 +676,7 @@ function fileGraph(folder) {
     if (!n) {
       const outside = !under(f.path, folder), dir = k.startsWith('dir:') ? k.slice(4) : null;
       n = { id: k, files: [], ext: outside, outside, out: new Map(), inn: new Set() };
-      if (dir) Object.assign(n, { dir, name: outside ? folderName(dir) : relTo(dir, folder) + '/', sub: outside ? 'Elsewhere' : dir + '/' });
+      if (dir) Object.assign(n, { dir, name: outside ? folderName(dir) : areaName(dir, folder, split), sub: outside ? 'Elsewhere' : dir + '/' });
       else Object.assign(n, { file: f, name: baseOf(f.path), sub: (dirOf(f.path) || '.') + '/' });
       nodes.set(k, n);
     }
@@ -676,7 +721,7 @@ function fileGraph(folder) {
       if (e && side === 'now' && !im.typeOnly && !f.test && !t.test) e.pairs.get(pk).fcycle = M.fileCycleState(f.path, t.path);
     }
   }
-  const G = { folder, tests: showTests, keyOf, nodes, edges, link };
+  const G = { folder, tests: showTests, keyOf, nodes, edges, link, areas: split.size ? new Set([...nodes.values()].filter(n => !n.ext && n.changed).map(n => n.id)).size : 0 };
   moduleLayer(G);
   for (const e of edges.values()) {
     const ps = [...e.pairs.values()];
@@ -1258,6 +1303,9 @@ function renderCrumbs() {
   // Desktop: the whole path, each folder a link.
   const t = $('#ltrail');
   t.innerHTML = chain.map((f, i) => i === chain.length - 1 ? `<b>${esc(segName(f, i))}</b>` : `<button class="linkbtn" data-folder="${esc(f)}">${esc(segName(f, i))}</button>`).join('<span>›</span>');
+  // The map opened folders where nothing changed to show where the changes are.
+  const areas = !layerModule() && graph().areas;
+  if (areas) t.innerHTML += `<span class="lareas">· ${plural(areas, 'change area')}</span>`;
   t.scrollLeft = t.scrollWidth;
   // Phones: the current folder, with the folders above it a tap away.
   const par = chain.length > 2 ? relTo(chain[chain.length - 2], projectRoot) + '/' : '';
@@ -2216,7 +2264,7 @@ document.addEventListener('click', e => {
   else if (b.dataset.action === 'show-all') { showAll = $('#showAll').checked = true; renderGraph(); }
   else if (b.dataset.action === 'more') { openBoxes.add(b.dataset.box); renderGraph(); }
   // A row opens its file at that row's section, also in the file box that is already selected.
-  else if (b.dataset.focus) go({ type: 'symbol', id: b.dataset.sym, focus: b.dataset.focus });
+  else if (b.dataset.focus) go({ type: 'symbol', id: b.dataset.sym, focus: b.dataset.focus, ...(b.closest('.node') ? { folder } : {}) });
   else if (b.dataset.folder !== undefined) go({ type: 'folder', id: b.dataset.folder, folder: b.dataset.folder });
   // A second click on the selected file box deselects it.
   else if (b.dataset.sym) go(b.closest('.node') && selected === b.dataset.sym ? { type: 'folder', id: folder, folder } : { type: 'symbol', id: b.dataset.sym });
