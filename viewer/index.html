@@ -405,6 +405,27 @@ details.file>summary.fhead:hover{background:var(--line)}
 .tlayer>summary{cursor:pointer;padding:6px 4px;font-size:13px;color:var(--accent)}
 .tlayer[open]>summary{color:var(--ink);font-weight:500}
 .tflag.tchecks{color:var(--accent);border-color:var(--accent)}
+
+/* Rows in boxes */
+.node .rsep{stroke:var(--line)}
+.node .rg{font:11px var(--mono);fill:var(--muted)}
+.node .row{cursor:pointer}
+.node .row .rbg{fill:transparent}
+.node .row:hover .rbg,.node .row.on .rbg,.node .row.hl .rbg{fill:var(--accent-soft)}
+.node .row .rgl{font:600 12.5px var(--mono);fill:var(--mod)}
+.node .row.r-added .rgl{fill:var(--add)} .node .row.r-removed .rgl{fill:var(--del)} .node .row.uses .rgl{fill:var(--accent)}
+.node .row .rnm{font:12px var(--mono);fill:var(--ink)} .node .row .rnm.sec{font-family:var(--sans);font-style:italic}
+.node .row.r-removed .rnm{text-decoration:line-through;fill:var(--muted)}
+.node .row .rln{font:11px var(--sans);fill:var(--muted)} .node .row .rln .a{fill:var(--add)} .node .row .rln .d{fill:var(--del)}
+.node .row .pill{fill:none;stroke:var(--line)} .node .row .pt{font:10px var(--sans);fill:var(--muted)}
+.node .row .pill.rt{stroke:var(--accent)} .node .row .pt.rt{fill:var(--accent);font-family:var(--mono)}
+.node .row .pill.sg{stroke:var(--mod)} .node .row .pt.sg{fill:var(--mod)}
+.node .row .pill.nt{stroke:var(--del);stroke-dasharray:3 2} .node .row .pt.nt{fill:var(--del)}
+.node .row .rmore{font:500 11.5px var(--sans);fill:var(--accent)}
+.canvas svg.dimmed .edge{opacity:.18}
+.rowlink{fill:none;stroke:var(--accent);stroke-width:2;pointer-events:none}
+details.sym.focus{box-shadow:inset 3px 0 0 var(--accent);background:var(--accent-soft)}
+details.sym.focus>summary .sname{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -445,7 +466,7 @@ details.file>summary.fhead:hover{background:var(--line)}
       <label class="toggle"><input type="checkbox" id="showLinks"> Show all links</label>
       <label class="toggle"><input type="checkbox" id="showCycles"> Show existing cycles</label>
       <label class="toggle"><input type="checkbox" id="showTests"> Count test files</label>
-      <label class="toggle" id="layersWrap" hidden><input type="checkbox" id="showLayers" checked> Functions in layers</label>
+      <label class="toggle" id="layersWrap" hidden><input type="checkbox" id="showLayers"> Functions in layers</label>
       <div class="legend" aria-label="Legend">
         <span><i style="background:var(--mod)"></i>Changed</span>
         <span><i style="background:var(--add)"></i>New</span>
@@ -486,7 +507,7 @@ const short = id => id.includes('#') ? id.slice(id.indexOf('#') + 1) : baseOf(id
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 let D, byId, modById, fileByPath, nodesByFile, M, FG, folder = '', projectRoot = '';
-let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, showLayers = true, history = [];
+let selected = null, showAll = false, showLinks = false, showCycles = false, showTests = false, showLayers = false, history = [];
 
 /* ---------- Model ---------- */
 function build() {
@@ -714,6 +735,135 @@ const graph = () => FG && FG.folder === folder && FG.tests === showTests ? FG : 
 /** The folder to show: the one asked for, or the project's root. */
 const folderFor = dir => compact(dir !== undefined && dir !== null && under(dir + '/', projectRoot) ? dir : projectRoot);
 
+/* ---------- Rows in boxes ---------- */
+// A changed box lists what changed inside it, so a PR reads from the map: new (+), changed (~) and
+// removed (−) symbols with their line counts, grouped by class in a file box and by file in a folder
+// box, and a .vue file's Template and Styles. A box that only uses changed code lists the code in it
+// that uses the changes. Up to ROW_MAX rows, then "+ N more" opens the box.
+const ROW_MAX = 8, ROW_H = 19, CHIP_H = 16, GROUP_H = 16;
+let openBoxes = new Set(), rowAnchors = new Map(), hoverRow = null;
+const rowGlyph = st => st === 'added' ? '+' : st === 'removed' ? '−' : '~';
+/** The labels on a changed row: a new route, a changed signature, no test, a module import gained or lost. */
+function rowChips(n) {
+  const C = D.checks, out = [], ch = n.change;
+  if (n.route && ch.status === 'added') out.push({ t: routeText(n.route), c: 'rt' });
+  if (ch.signatureChanged) out.push({ t: 'signature', c: 'sg' });
+  if (C.untested.includes(n.id)) out.push({ t: 'no test', c: 'nt' });
+  const mod = D.modules.find(m => m.classId === n.id);
+  if (mod) {
+    for (const e of C.newModuleDependencies) if (e.from === mod.id && e.via === 'module-import') out.push({ t: `imports ${modName(e.to)}`, c: '' });
+    for (const e of C.removedModuleDependencies) if (e.from === mod.id && e.via === 'module-import') out.push({ t: `drops ${modName(e.to)}`, c: '' });
+  }
+  return out;
+}
+/** The changed symbols of one file, as rows; `groupBy` names the group a row goes under. */
+function fileRows(f, groupBy) {
+  const rows = [];
+  for (const x of f.change.sections || []) {
+    const c = counts(x.hunks);
+    rows.push({ id: `${f.path}|${x.name}`, path: f.path, name: x.name === 'template' ? 'Template' : 'Styles', section: true, st: 'modified', a: c.a, d: c.d, chips: [], group: groupBy(null) });
+  }
+  const syms = (nodesByFile.get(f.path) || []).filter(s => s.change && (s.change.hunks.length || s.change.status === 'removed') && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
+  for (const s of syms) {
+    const c = counts(s.change.hunks), st = s.change.status;
+    rows.push({
+      id: s.id, path: f.path, sym: s.id, st, a: c.a, d: c.d,
+      name: s.kind === 'file' ? (isVue(f.path) ? 'Script: imports and top level' : 'Imports and top of file') : s.kind === 'test' ? tcOf(s).title : s.parent ? s.name : short(s.id),
+      section: s.kind === 'file', chips: s.kind === 'file' || s.kind === 'test' ? [] : rowChips(s), group: groupBy(s),
+    });
+  }
+  return rows;
+}
+/** What a box lists: its changed rows, or, for a box that only uses changed code, the code in it that does. */
+function boxRows(n) {
+  if (n.rest) return [];
+  if (n.changed) {
+    const files = n.files.filter(f => f.change).sort((a, b) => a.path.localeCompare(b.path));
+    return files.flatMap(f => fileRows(f, s => {
+      // A folder box groups by file, a file box by class.
+      return n.dir ? relTo(f.path, n.dir) : s?.parent ? short(s.parent) : '';
+    }));
+  }
+  if (!n.affected) return [];
+  const rows = [];
+  for (const f of n.files) for (const s of nodesByFile.get(f.path) || []) {
+    if (s.kind === 'file' && !isVue(f.path)) continue;
+    const used = s.uses.map(u => byId.get(u)).filter(u => u?.change);
+    if (!used.length) continue;
+    const u = used.find(x => x.change.status === 'removed') || used[0], verb = u.change.status === 'removed' ? 'calls removed' : u.change.status === 'added' ? 'uses new' : 'uses changed';
+    rows.push({ id: s.id, sym: s.id, uses: true, name: s.kind === 'file' ? baseOf(f.path) : short(s.id), chips: [{ t: `${verb} ${u.name}${used.length > 1 ? ` +${used.length - 1}` : ''}`, c: u.change.status === 'removed' ? 'nt' : '' }], group: n.dir ? relTo(f.path, n.dir) : '' });
+  }
+  return rows;
+}
+/** The rows a box shows now: all of them once opened, else the first ROW_MAX. */
+const shownRows = (id, rows) => openBoxes.has(id) ? rows : rows.slice(0, ROW_MAX);
+/** A box's height: its head, the test rollup when there is one, and its rows. */
+function boxHeight(id, n) {
+  const head = n.tstat?.fns ? H : 78;
+  const rows = n.rows || [];
+  if (!rows.length) return head;
+  const shown = shownRows(id, rows);
+  let h = head + 8, g = null;
+  for (const r of shown) { if (r.group && r.group !== g) { h += GROUP_H; g = r.group; } h += ROW_H + (r.chips.length ? CHIP_H : 0); }
+  if (shown.length < rows.length) h += ROW_H;
+  return h + 6;
+}
+const pillW = (t, mono) => Math.round(t.length * (mono ? 6.1 : 5.4) + 12);
+/** The rows of a box in SVG, from `y0` down; records where each row is for its links. */
+function rowsSvg(id, n, p, y0) {
+  const rows = n.rows, shown = shownRows(id, rows);
+  let y = y0 + 8, g = null, out = `<line class="rsep" x1="12" x2="${W - 10}" y1="${y0 + 2}" y2="${y0 + 2}"/>`;
+  const sel = view.type === 'symbol' ? view.focus ?? view.id : null;
+  for (const r of shown) {
+    if (r.group && r.group !== g) { out += `<text class="rg" x="14" y="${y + 11}">${esc(clipStart(r.group, 33))}</text>`; y += GROUP_H; g = r.group; }
+    const h = ROW_H + (r.chips.length ? CHIP_H : 0);
+    // A changed row opens its file at that row's section; a row of code that only uses changes opens that code.
+    const target = r.uses ? `data-sym="${esc(r.sym)}"` : `data-sym="${esc(r.path)}" data-focus="${esc(r.id)}"`;
+    const cls = ['row', r.uses ? 'uses' : 'r-' + r.st, r.id === sel || (r.sym && r.sym === hoverRow) ? 'on' : ''].join(' ');
+    let chips = '', cx = 26;
+    for (const c of r.chips) { const w = pillW(c.t, c.c === 'rt'); if (cx + w > W - 8) break; chips += `<rect class="pill ${c.c}" x="${cx}" y="${ROW_H - 2}" width="${w}" height="13" rx="6.5"/><text class="pt ${c.c}" x="${cx + 6}" y="${ROW_H + 8}">${esc(c.t)}</text>`; cx += w + 4; }
+    const ln = r.uses ? '' : `${r.a ? `<tspan class="a">+${r.a}</tspan>` : ''}${r.a && r.d ? ' ' : ''}${r.d ? `<tspan class="d">−${r.d}</tspan>` : ''}`;
+    out += `<g class="${cls}" ${target} data-row="${esc(r.id)}" transform="translate(0,${y})"><rect class="rbg" x="8" y="0" width="${W - 16}" height="${h}" rx="5"/>
+      <text class="rgl" x="16" y="13" text-anchor="middle">${r.uses ? '→' : rowGlyph(r.st)}</text><text class="rnm${r.section ? ' sec' : ''}" x="26" y="13">${esc(clip(r.name, ln ? 24 : 32))}</text>${ln ? `<text class="rln" x="${W - 12}" y="13" text-anchor="end">${ln}</text>` : ''}${chips}<title>${esc(r.name)}</title></g>`;
+    if (r.sym) rowAnchors.set(r.sym, { box: id, x: p.x, y: p.y + y + ROW_H / 2 });
+    y += h;
+  }
+  if (shown.length < rows.length) out += `<g class="row more" data-action="more" data-box="${esc(id)}" transform="translate(0,${y})"><rect class="rbg" x="8" y="0" width="${W - 16}" height="${ROW_H}" rx="5"/><text class="rmore" x="26" y="13">+ ${rows.length - shown.length} more</text></g>`;
+  return out;
+}
+/**
+ * The links of one symbol while its row is hovered or selected: to what it calls and from what calls
+ * it, each to that symbol's row or else its box. The other links dim.
+ */
+function drawRowLinks(sym) {
+  const svg = $('#canvas svg');
+  if (!svg) return;
+  svg.querySelector('.rowlinks')?.remove();
+  svg.classList.toggle('dimmed', !!sym);
+  for (const r of svg.querySelectorAll('.row[data-row]')) r.classList.toggle('hl', !!sym && r.dataset.row === sym);
+  const n = sym && byId.get(sym), from = sym && rowAnchors.get(sym);
+  if (!n || !from) return;
+  const G = graph(), anchor = id => {
+    const r = rowAnchors.get(id);
+    if (r) return r;
+    const k = byId.get(id) && G.keyOf(byId.get(id).file), p = k && boxPos.get(k);
+    return p ? { box: k, x: p.x, y: p.y + 39 } : null;
+  };
+  const typeOnly = new Set(n.typeUses || []);
+  const pairs = [...n.uses.filter(u => !typeOnly.has(u)).map(u => [from, anchor(u)]), ...n.references.map(r => [anchor(r), from])];
+  let d = '';
+  const seen = new Set();
+  for (const [a, b] of pairs) {
+    if (!a || !b || a.box === b.box) continue;
+    const k = `${a.x},${a.y}>${b.x},${b.y}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const fwd = b.x >= a.x, x1 = fwd ? a.x + W : a.x, x2 = fwd ? b.x - 6 : b.x + W + 6, dx = Math.max(30, Math.abs(x2 - x1) / 2) * (fwd ? 1 : -1);
+    d += `<path class="rowlink" d="M${x1},${a.y} C${x1 + dx},${a.y} ${x2 - dx},${b.y} ${x2},${b.y}" marker-end="url(#mc)"/>`;
+  }
+  svg.insertAdjacentHTML('beforeend', `<g class="rowlinks">${d}</g>`);
+}
+
 /* ---------- Graph ---------- */
 const W = 232, CG = 92, RG = 22, PAD = 28;
 /** Box height: two more lines for the test rollup when the dyffle knows test cases. */
@@ -755,15 +905,17 @@ function layout(ids) {
     col.sort((a, b) => score(a) - score(b) || (G.nodes.get(b).changed - G.nodes.get(a).changed) || G.nodes.get(a).name.localeCompare(G.nodes.get(b).name));
     col.forEach((id, ri) => row.set(id, ri));
   });
-  const maxRows = Math.max(1, ...cols.map(c => c ? c.length : 0));
-  const fullH = maxRows * (H + RG) - RG;
+  // Boxes differ in height (their rows), so each column stacks its boxes' own heights.
+  const hOf = id => G.nodes.get(id).h ?? H;
+  const colH = c => c.reduce((a, id) => a + hOf(id) + RG, 0) - RG;
+  const fullH = Math.max(H, ...cols.map(c => c ? colH(c) : 0));
   cols.forEach((col, ci) => {
     if (!col) return;
-    const off = (fullH - (col.length * (H + RG) - RG)) / 2;
-    col.forEach((id, ri) => pos.set(id, { x: PAD + ci * (W + CG), y: PAD + off + ri * (H + RG) }));
+    let y = PAD + (fullH - colH(col)) / 2;
+    col.forEach(id => { pos.set(id, { x: PAD + ci * (W + CG), y, h: hOf(id) }); y += hOf(id) + RG; });
   });
   const col = new Map(); cols.forEach((c, ci) => c && c.forEach(id => col.set(id, ci)));
-  const bottom = cols.map(c => c ? Math.max(...c.map(id => pos.get(id).y + H)) : PAD);
+  const bottom = cols.map(c => c ? Math.max(...c.map(id => pos.get(id).y + hOf(id))) : PAD);
   return { pos, col, bottom, width: PAD * 2 + cols.length * (W + CG) - CG, height: PAD * 2 + fullH + 30 };
 }
 const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
@@ -783,6 +935,8 @@ function renderGraph() {
   renderCrumbs();
   const ids = visibleIds();
   if (!ids.length) { cv.innerHTML = '<p class="empty">No files.</p>'; return; }
+  for (const id of ids) { const n = G.nodes.get(id); n.rows ??= boxRows(n); n.h = boxHeight(id, n); }
+  rowAnchors = new Map();
   const L = layout(ids), { pos, col, bottom } = L;
   boxPos = pos;
   let height = L.height, width = L.width;
@@ -799,14 +953,15 @@ function renderGraph() {
   for (const e of vis) {
     const a = pos.get(e.from), b = pos.get(e.to), ca = col.get(e.from), cb = col.get(e.to);
     let d;
-    const x1 = a.x + W, y1 = a.y + H / 2 + op.get(e), x2 = b.x - 6, y2 = b.y + H / 2 + ip.get(e);
+    // Links meet a box at its head, which keeps its place however many rows the box lists.
+    const x1 = a.x + W, y1 = a.y + 39 + op.get(e), x2 = b.x - 6, y2 = b.y + 39 + ip.get(e);
     if (cb === ca + 1) { const dx = (x2 - x1) / 2; d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`; }
     else if (cb > ca + 1) {
       const ly = Math.max(...bottom.slice(ca + 1, cb)) + 22 + 12 * lanes++;
       height = Math.max(height, ly + PAD);
       const gs = x1 + CG / 2, ge = b.x - CG / 2, k = CG * 0.42;
       d = `M${x1},${y1} C${x1 + k},${y1} ${gs - 4},${ly} ${gs + 14},${ly} L${ge - 14},${ly} C${ge + 4},${ly} ${x2 - k},${y2} ${x2},${y2}`;
-    } else { const bx1 = a.x + W / 2, by1 = a.y + H, bx2 = b.x + W / 2 + 10, by2 = b.y + H + 6, lo = Math.max(by1, by2) + 40; height = Math.max(height, lo + PAD); d = `M${bx1},${by1} C${bx1},${lo} ${bx2},${lo} ${bx2},${by2}`; }
+    } else { const bx1 = a.x + W / 2, by1 = a.y + a.h, bx2 = b.x + W / 2 + 10, by2 = b.y + b.h + 6, lo = Math.max(by1, by2) + 40; height = Math.max(height, lo + PAD); d = `M${bx1},${by1} C${bx1},${lo} ${bx2},${lo} ${bx2},${by2}`; }
     const near = focus && (selected ? (e.from === selected || e.to === selected) : (focus.has(e.from) && focus.has(e.to)));
     const dim = focus && !near;
     // Links the PR didn't change only show around the selected or hovered module, and an existing
@@ -842,15 +997,17 @@ function renderGraph() {
     // Bottom right: an eye while the box still holds a changed file that is not marked viewed.
     const eye = n.unviewed ? `<g class="nv" transform="translate(${W - 28},55)"><path d="M1 5s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4z"/><circle cx="8" cy="5" r="1.8"/><title>${n.dir ? `${plural(n.unviewed, 'changed file')} not viewed yet` : 'Not viewed yet'}</title></g>` : '';
     nh += `<g class="${cls}" data-k="${esc(id)}" ${target} tabindex="0" role="button" aria-label="${esc(n.name)}, ${n.changed ? n.state : n.affected ? 'uses changed code' : 'unchanged'}${n.unviewed ? ', not viewed yet' : ''}" transform="translate(${p.x},${p.y})">
-      <rect class="box" width="${W}" height="${H}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${H}" rx="2.5"/>
+      <rect class="box" width="${W}" height="${p.h}" rx="10"/><rect class="bar" x="0" y="0" width="5" height="${p.h}" rx="2.5"/>
       ${n.dir ? `<path class="fold" d="M18 13h5l2 2h7v8h-14z"/>` : ''}<text class="nm" x="${n.dir ? 38 : 18}" y="25">${esc(n.dir ? clipStart(n.name, nameLen) : clip(n.name, nameLen))}</text>${tag ? `<text class="tag" x="${W - 12}" y="24" text-anchor="end">${tag}</text>` : ''}
       <text class="pth" x="18" y="44">${esc(clip(n.sub ?? n.id, 29))}</text>
-      <text class="meta" x="18" y="64">${meta}</text>${n.tstat?.fns ? testRollup(n.tstat) : ''}${eye}<title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
+      <text class="meta" x="18" y="64">${meta}</text>${n.tstat?.fns ? testRollup(n.tstat) : ''}${eye}${n.rows.length ? rowsSvg(id, n, p, n.tstat?.fns ? H : 78) : ''}<title>${esc(n.rest ? 'Show the unchanged files and folders here' : n.name + '\n' + (n.file ? n.file.path : n.dir ? n.dir + '/' : n.ext ? n.mod : n.id))}</title></g>`;
   }
   const vw = Math.max(width, 300);
   cv.innerHTML = `<svg viewBox="0 0 ${vw} ${height}" width="${vw}" height="${height}" role="img" aria-label="Files in ${esc(folderName(folder))}">
     <defs>${['mn', 'mc', 'mr', 'mp', 'mx'].map((m, i) => `<marker id="${m}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="${['mk-n', 'mk-c', 'mk-r', 'mk-p', 'mk-x'][i]}" d="M0,0 L10,5 L0,10 z"/></marker>`).join('')}</defs>
     ${eh}${nh}</svg>`;
+  const selRow = view.type === 'symbol' ? (byId.get(view.focus) ? view.focus : view.id) : null;
+  if (selRow && rowAnchors.has(selRow)) drawRowLinks(selRow);
   cam.w = vw; cam.h = height;
   const key = `${folder}|${vw}x${height}`;
   if (key !== cam.key) { cam.key = key; fitCam(); }
@@ -973,7 +1130,7 @@ function fitBoxes(ids) {
   const ps = ids.map(id => boxPos.get(id)).filter(Boolean), cv = $('#canvas');
   if (!ps.length || !cv.clientWidth) return;
   const x0 = Math.min(...ps.map(p => p.x)), y0 = Math.min(...ps.map(p => p.y));
-  const x1 = Math.max(...ps.map(p => p.x + W)), y1 = Math.max(...ps.map(p => p.y + H));
+  const x1 = Math.max(...ps.map(p => p.x + W)), y1 = Math.max(...ps.map(p => p.y + (p.h ?? H)));
   const a = visibleArea(), m = 16, fw = (a.width - 2 * m) / (x1 - x0), fh = (a.height - 2 * m) / (y1 - y0);
   // On phones the visible strip is small: stop at a readable size and line the boxes up from the
   // top-left, so the rest is a pan away instead of everything shrinking to unreadable.
@@ -993,7 +1150,7 @@ function focusBox(id) {
   if (cam.s < minS) cam.s = minS;
   const { x, y } = visibleArea();
   cam.x = x - (p.x + W / 2) * cam.s;
-  cam.y = y - (p.y + H / 2) * cam.s;
+  cam.y = y - (p.y + Math.min(p.h ?? H, 160) / 2) * cam.s;
   cam.fitted = false;
   clampCam();
   cv.classList.add('glide');
@@ -1479,19 +1636,22 @@ const bySize = (a, b) => (b.change.additions + b.change.deletions) - (a.change.a
 /** A changed file: its changed symbols with their own diffs, then the whole file diff. */
 const isVue = p => p.endsWith('.vue');
 /** `tests: false` leaves test cases out, for a spec file's panel that lists them on its own. */
-function fileSection(f, collapsed = false, tests = true) {
+function fileSection(f, collapsed = false, tests = true, focus = null) {
   const syms = D.nodes.filter(s => s.file === f.path && s.change && s.change.hunks.length && (tests || s.kind !== 'test') && !(s.kind === 'class' && D.nodes.some(c => c.parent === s.id && c.change)));
   // A .vue file's <template> and <style> blocks belong to no symbol: they get a section each, around the script's symbols.
-  const sections = f.change.sections || [], open = syms.length + sections.length <= 4 ? ' open' : '';
+  // With a focus (a row clicked on the map), only that section is open and it is marked.
+  const sections = f.change.sections || [], open = !focus && syms.length + sections.length <= 4 ? ' open' : '';
+  const att = id => focus === id ? ' open data-focus="1"' : open;
+  const fcls = id => focus === id ? 'sym focus' : 'sym';
   const sectionHtml = name => sections.filter(x => x.name === name).map(x => {
-    const c = counts(x.hunks);
-    return `<details class="sym"${open}><summary><span class="sname">${name === 'template' ? 'Template' : 'Styles'}</span><span class="kind">changed</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
+    const c = counts(x.hunks), id = `${f.path}|${x.name}`;
+    return `<details class="${fcls(id)}"${att(id)}><summary><span class="sname">${name === 'template' ? 'Template' : 'Styles'}</span><span class="kind">changed</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
       <div class="sbody">${diffBlock(x.hunks, f.path, f.path)}</div></details>`;
   }).join('');
   const symHtml = sectionHtml('template') + syms.map(s => {
     if (s.kind === 'test') return testCaseRow(s, '', !!open);
     const c = counts(s.change.hunks);
-    return `<details class="sym"${open}><summary><span class="sname">${esc(s.kind === 'file' ? isVue(f.path) ? 'Script: imports and top level' : 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
+    return `<details class="${fcls(s.id)}"${att(s.id)}><summary><span class="sname">${esc(s.kind === 'file' ? isVue(f.path) ? 'Script: imports and top level' : 'Imports and top of file' : short(s.id))}</span>${s.route ? routeChip(s.route) : ''}<span class="kind">${esc([s.kind === 'file' ? '' : kindWord(s), statusWord(s.change.status), s.change.signatureChanged ? 'signature changed' : ''].filter(Boolean).join(', '))}</span><span class="grow"></span><span><span class="n-a">+${c.a}</span> <span class="n-d">−${c.d}</span></span></summary>
       <div class="sbody">${diffBlock(s.change.hunks, f.path, s.id)}${s.kind !== 'file' ? `<p style="margin:8px 0 0"><button class="linkbtn" data-sym="${esc(s.id)}">${s.references.length ? `${plural(s.references.length, 'reference')}, ` : ''}open details →</button></p>` : ''}</div></details>`;
   }).join('') + sectionHtml('style');
   const ch = f.change;
@@ -1836,7 +1996,7 @@ function tree(id, dir, depth, seen) {
     return `<li><button data-sym="${esc(x)}">${esc(symLabel(x))}${n.route ? ' ' + routeChip(n.route) : ''}${changeOf(n) ? ` <span class="badge b-${changeOf(n).status}">${statusWord(changeOf(n).status)}</span>` : ''}${n.test ? ' <span class="badge b-test">test</span>' : ''}</button>${tree(x, dir, depth - 1, seen)}</li>`;
   }).join('')}${items.length > 30 ? `<li class="note">…and ${items.length - 30} more</li>` : ''}</ul>`;
 }
-function renderSymbol(id) {
+function renderSymbol(id, focus = null) {
   const n = byId.get(id);
   if (!n) return;
   const C = D.checks;
@@ -1859,7 +2019,7 @@ function renderSymbol(id) {
     ${broken.length ? `<h3>Broken references<span class="count warn">${broken.length}</span></h3><div class="refs">${broken.map(d => d.from === id ? symBtn(d.to, ' · removed by this PR') : symBtn(d.from, ' · still calls this')).join('')}</div>` : ''}
     ${fc ? `<h3>Circular imports<span class="count ${fcNew ? 'warn' : ''}">${fc.length - 1}</span></h3><p class="note">${fcNew ? 'This PR creates a cycle of imports between this file and these.' : 'This file is part of a cycle of imports that already existed.'}</p><div class="refs">${fc.filter(f => f !== file.path).map(f => symBtn(f)).join('')}</div>` : ''}
     ${sig && sig.callersOutsidePr.length ? `<h3>Callers to check<span class="count warn">${sig.callersOutsidePr.length}</span></h3><p class="note">The signature changed; these callers are outside the PR.</p><div class="refs">${sig.callersOutsidePr.map(r => symBtn(r)).join('')}</div>` : ''}
-    ${file && watch && canWhole(file) ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file, false, !file.test)}` : ch && ch.hunks.length ? n.kind === 'test' ? `<details class="whole"><summary>Code diff</summary><div class="sbody">${diffBlock(ch.hunks, n.file, n.id)}</div></details>` : `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
+    ${file && watch && canWhole(file) && !focus ? wholeSection(file) : file?.change ? `<h3>What changed</h3>${fileSection(file, false, !file.test, focus)}` : ch && ch.hunks.length ? n.kind === 'test' ? `<details class="whole"><summary>Code diff</summary><div class="sbody">${diffBlock(ch.hunks, n.file, n.id)}</div></details>` : `<h3>Diff</h3>${diffBlock(ch.hunks, n.file, n.id)}` : ''}
     ${routes.length ? `<h3>Reaches routes<span class="count">${routes.length}</span></h3><div class="check">${routes.map(r => `<button class="row" data-sym="${esc(r.routeId)}"><span class="main">${routeChip(r.route)}</span><span class="chain">${r.chain.map(x => `<span>${esc(symLabel(x))}</span>`).join('')}</span></button>`).join('')}</div>` : ''}
     ${n.kind === 'test' ? testCaseSection(n) : testsSection(n)}
     ${n.kind === 'class' ? classSpec(children.filter(isFn)) : n.kind === 'file' && !n.test ? classSpec(D.nodes.filter(c => c.file === n.file && isFn(c))) : ''}
@@ -1882,7 +2042,7 @@ function renderView(v, el) {
     else if (v.type === 'changes') renderChanges();
     else if (v.type === 'module') renderModule(v.id);
     else if (v.type === 'folder') renderFolder(v.id);
-    else renderSymbol(v.id);
+    else renderSymbol(v.id, v.focus);
     if (watch) fillSources(el);
     hideGutters(el);
   } finally { out = $('#pin'); }
@@ -1907,6 +2067,8 @@ function go(next, push = true) {
   if (watch) updateChangesButton();
   renderGraph();
   $('#panel').scrollTop = 0;
+  // A row opened its file at one section: bring that section into view.
+  if (view.focus) $('#pin .sym.focus')?.scrollIntoView({ block: 'start' });
   $('#sheetBtn').setAttribute('aria-label', `Open the details: ${view.type === 'summary' ? 'summary' : view.type === 'changes' ? 'changes' : view.type === 'module' ? modName(view.id) : view.type === 'folder' ? folderName(view.id) : symLabel(view.id)}`);
   // A tap on the empty map deselects without opening the details again, and opening a folder only
   // moves the map: its details update behind the closed sheet.
@@ -2052,6 +2214,9 @@ document.addEventListener('click', e => {
   if (b.dataset.action === 'back') back();
   else if (b.dataset.action === 'close-side') closeSide();
   else if (b.dataset.action === 'show-all') { showAll = $('#showAll').checked = true; renderGraph(); }
+  else if (b.dataset.action === 'more') { openBoxes.add(b.dataset.box); renderGraph(); }
+  // A row opens its file at that row's section, also in the file box that is already selected.
+  else if (b.dataset.focus) go({ type: 'symbol', id: b.dataset.sym, focus: b.dataset.focus });
   else if (b.dataset.folder !== undefined) go({ type: 'folder', id: b.dataset.folder, folder: b.dataset.folder });
   // A second click on the selected file box deselects it.
   else if (b.dataset.sym) go(b.closest('.node') && selected === b.dataset.sym ? { type: 'folder', id: folder, folder } : { type: 'symbol', id: b.dataset.sym });
@@ -2074,6 +2239,14 @@ const hoverLinks = id => {
   for (const p of $('#canvas').querySelectorAll('.edge.ctx')) p.classList.toggle('on', !!id && (p.dataset.a === id || p.dataset.b === id));
 };
 $('#canvas').addEventListener('mouseover', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
+/** Hovering a row draws its symbol's links; leaving it goes back to the selected row's. */
+$('#canvas').addEventListener('mouseover', e => {
+  const r = e.target.closest('.row[data-row]'), sym = r && byId.has(r.dataset.row) ? r.dataset.row : null;
+  if (sym === hoverRow) return;
+  hoverRow = sym;
+  const selRow = view.type === 'symbol' ? (byId.get(view.focus) ? view.focus : view.id) : null;
+  drawRowLinks(sym ?? (rowAnchors.has(selRow) ? selRow : null));
+});
 $('#canvas').addEventListener('mouseleave', () => hoverLinks(null));
 $('#canvas').addEventListener('focusin', e => hoverLinks(e.target.closest('.node')?.dataset.k ?? null));
 $('#showLayers').addEventListener('change', e => { showLayers = e.target.checked; go(view, false); });
